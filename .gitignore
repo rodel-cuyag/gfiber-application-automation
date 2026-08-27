@@ -1,0 +1,36 @@
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Python cache/bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Generated reports (these are outputs, not source — regenerated each run)
+output/**/*.xlsx
+output/**/*.csv
+!output/**/.gitkeep
+
+# Input data (often contains real customer data — usually shouldn't be committed)
+data/**/*.txt
+data/**/*.csv
+data/**/*.xlsx
+!data/**/.gitkeep
+
+# Archived input files (real customer data — usually shouldn't be committed)
+archive/**/*.txt
+archive/**/*.csv
+archive/**/*.xlsx
+!archive/**/.gitkeep
+
+# VS Code settings (optional — some teams commit these, most don't)
+.vscode/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Environment variables / secrets, if you ever add any (e.g. API keys)
+.env
