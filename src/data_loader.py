@@ -184,7 +184,7 @@ def resolve_contact_list_path(path=None):
 
     # Auto-discover: scan data/contact_list/ for files with matching headers.
     # Only CSV/Excel are supported — a bare .txt phone list can't carry the
-    # customer name the agent's spiel needs, or the application date.
+    # customer name the agent's spiel needs.
     csv_signature = set(config.REQUIRED_CONTACT_LIST_HEADERS)
     matches = []
 
@@ -245,9 +245,8 @@ def resolve_contact_list_path(path=None):
 
 
 def load_contact_list(path) -> pd.DataFrame:
-    """Load the raw GFiber contact list (customer_phone, user,
-    application_date). Supports .csv and .xlsx/.xls — auto-detected from
-    the file extension."""
+    """Load the raw GFiber contact list (customer_phone, user). Supports
+    .csv and .xlsx/.xls — auto-detected from the file extension."""
     with Spinner(f"Loading {path.name}"):
         if path.suffix.lower() == ".csv":
             return pd.read_csv(path)
