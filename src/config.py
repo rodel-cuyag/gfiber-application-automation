@@ -64,7 +64,7 @@ VALIDATION_OUTPUT_FILENAME_TEMPLATE = "GFiber_Application_Validation_Report_{dat
 # The GFiber agent's opening message interpolates {user}, so the customer
 # name is required alongside the number — a blank name would produce a
 # broken spiel on the call.
-REQUIRED_CONTACT_LIST_HEADERS = ["customer_phone", "user", "application_date"]
+REQUIRED_CONTACT_LIST_HEADERS = ["customer_phone", "user"]
 
 # Constant ref_id value stamped on every row of the Contact List CSV output.
 CONTACT_LIST_REF_ID = "GOCUC20"

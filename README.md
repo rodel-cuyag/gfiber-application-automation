@@ -14,8 +14,8 @@ Generates one of two reports:
 
 - **Contact List** — produces one CSV and one Excel workbook from the
   customer list file provided by Globe: a **Contact List CSV** (valid
-  records, oldest abandoned application first) and a **Validation Report**
-  (2-sheet data quality report with invalid records).
+  records, with phone numbers normalized for dialling) and a **Validation
+  Report** (2-sheet data quality report with invalid records).
 
 ---
 
@@ -60,14 +60,14 @@ Generates one of two reports:
    - `data/eod/twilio_webhook_events.csv` (needs `conversation_id`, `event`)
 
    **Contact List mode** (one file in `data/contact_list/`):
-   - CSV or Excel, needs `customer_phone`, `user`, and `application_date` columns:
+   - CSV or Excel, needs `customer_phone` and `user` columns:
      `data/contact_list/gfiber_abandoned_applications.xlsx`
 
 8. **Run it**
 ```bash
    python main.py --mode eod --agent-id 1595                             # EOD mode, today (PHT)
-   python main.py --mode contact-list                                    # Contact List mode, as-of today (PHT)
-   python main.py --mode contact-list --as-of-date 2026-08-26            # Contact List, specific date
+   python main.py --mode contact-list                                    # Contact List mode, stamped with today (PHT)
+   python main.py --mode contact-list --as-of-date 2026-08-26            # Contact List, stamped with a specific date
    python main.py --mode contact-list --input path/to/other.xlsx         # Contact List, override input file
 ```
    The generated files land in `output/eod/{date-or-range}/{HH-MM-SS}/` (EOD mode) or
@@ -106,7 +106,7 @@ safer long-term maintenance — worth it even for a small script like this.
 ```
 gfiber-application-automation/
 ├── data/
-│   ├── contact_list/          → input: any CSV/Excel with customer_phone + user + application_date columns (Contact List mode)
+│   ├── contact_list/          → input: any CSV/Excel with customer_phone + user columns (Contact List mode)
 │   └── eod/                   → input: 3 CSVs, auto-matched by column headers (EOD mode)
 ├── output/
 │   ├── contact_list/
@@ -130,7 +130,7 @@ gfiber-application-automation/
 │   ├── call_detail.py         → builds the "Call Detail Log" sheet (one row per call, one column per KPI field)
 │   ├── eod_report.py          → builds the "EOD Report" sheet (aggregated funnel summary)
 │   ├── prior_day.py           → best-effort reads back yesterday's saved EOD workbook to fill in the Yesterday/Δ columns (single-day runs only)
-│   ├── contact_list.py        → builds the Contact List + validates/categorizes records (valid, invalid); normalizes phone numbers to +63XXXXXXXXXX
+│   ├── contact_list.py        → validates/categorizes contact list records (valid, invalid); normalizes phone numbers to +63XXXXXXXXXX
 │   ├── validation_report.py   → builds the EOD mode's 5-sheet Validation Report (Join Summary, Field Completeness, Calculation Audit, Data Quality Issues, Duplicate Contacts)
 │   └── excel_writer.py        → writes DataFrames to formatted .xlsx (EOD Report, EOD Validation Report, Contact List Validation Report) and the Contact List to .csv
 ├── main.py                    → entry point; dispatches to run_eod() or run_contact_list() based on --mode
@@ -219,17 +219,18 @@ and re-run without digging through the archive.
 ### Mode 2: Contact List (`--mode contact-list`)
 
 ```bash
-python main.py --mode contact-list                               # as-of today (PHT)
-python main.py --mode contact-list --as-of-date 2026-08-26       # specific reference date
+python main.py --mode contact-list                               # stamped with today (PHT)
+python main.py --mode contact-list --as-of-date 2026-08-26       # stamped with a specific date
 python main.py --mode contact-list --input path/to/other.csv     # override input file (CSV or Excel)
 ```
 
-- `--as-of-date`: reference date in `YYYY-MM-DD` used to compute
-  `days_since_applied`. Defaults to today in PHT.
+- `--as-of-date`: report date in `YYYY-MM-DD`. It doesn't affect which
+  records are included or how they're ordered — it only stamps the output
+  folder (`output/contact_list/{date}/`), both output filenames, and the
+  archive folder. Defaults to today in PHT.
 - `--input`: override the contact list file path. If omitted, the file is
   auto-discovered in `data/contact_list/` by matching column headers
-  (`customer_phone` + `user` + `application_date`). Supports `.csv`,
-  `.xlsx`, and `.xls`.
+  (`customer_phone` + `user`). Supports `.csv`, `.xlsx`, and `.xls`.
 
 **Why `user` is required:** the agent's opening message and every
 re-verification / closing spiel interpolate `{user}` — the customer's name.
@@ -237,8 +238,9 @@ A blank name would put a broken sentence on the call, so records missing one
 are rejected rather than dialled.
 
 **Header validation:** before any processing, the script checks that the input
-file contains all three required columns. If any is missing, processing stops
-immediately with a clear error message.
+file contains both required columns. If either is missing, processing stops
+immediately with a clear error message. Any extra columns in the input file
+are ignored.
 
 **Phone normalization:** valid phone numbers in all outputs are formatted as
 `+63XXXXXXXXXX` (no spaces, consistent prefix) regardless of the input format.
@@ -251,12 +253,10 @@ Three input formats are accepted, all normalizing to the same `+63XXXXXXXXXX`:
 subfolder, with a further run-time-stamped subfolder per run):
 
 - `GFiber_Application_Contact_List_{date}.csv` — every record that passes
-  validation, with `customer_phone` normalized to `+63XXXXXXXXXX`, sorted by
-  `days_since_applied` **descending** (oldest abandoned application first —
-  the longest-neglected applications get dialled first). Includes a `ref_id`
-  column (constant value from `config.CONTACT_LIST_REF_ID`, currently
-  `GOCUC20`). `days_since_applied` is a plain calendar-day difference (e.g.
-  as-of date Aug 26, `application_date` Aug 10 → `16`).
+  validation, in **input file order** (there's no priority signal to sort
+  on, so the order Globe supplied is preserved). Three columns:
+  `customer_phone` (normalized to `+63XXXXXXXXXX`), `user`, and `ref_id`
+  (constant value from `config.CONTACT_LIST_REF_ID`, currently `GOCUC20`).
 - `GFiber_Application_Validation_Report_{date}.xlsx` — data validation +
   categorization (2 sheets: Summary, Invalid Data)
 
@@ -276,15 +276,13 @@ the input file is left in place untouched.
 | 2 | Invalid PH code | Number doesn't start with `+63`, `63`, `09`, or `9` |
 | 3 | Invalid length | Wrong digit count for the matched prefix (12 for `+63`/`63`, 11 for `09`, 10 for `9`), after stripping non-digits |
 | 4 | Missing customer name | `user` is blank |
-| 5 | Missing date | `application_date` is blank |
-| 6 | Invalid date | `application_date` cannot be parsed |
-| 7 | Duplicate phone | Same `customer_phone` appears more than once |
+| 5 | Duplicate phone | Same `customer_phone` appears more than once |
 
 Checks 1–3 are a phone chain (stops at the first failure — e.g. a missing
-phone won't also report an invalid code); check 4 (name) and checks 5–6 (date
-chain) run independently of the phone chain and of each other. Check 7
-(duplicate) always runs globally, in addition to whatever the other checks
-found. Multiple reasons on the same row are joined with `"; "`.
+phone won't also report an invalid code); check 4 (name) runs independently
+of the phone chain. Check 5 (duplicate) always runs globally, in addition to
+whatever the other checks found. Multiple reasons on the same row are joined
+with `"; "`.
 
 **Validation Report — 2 sheets:**
 
@@ -337,14 +335,12 @@ found. Multiple reasons on the same row are joined with `"; "`.
   that took part in a collision is listed in the Validation Report's
   **Duplicate Contacts** sheet, showing which one was kept.
 - **Contact List mode validates every record.** Invalid records (bad phone
-  format, missing name, unparseable date, duplicates) are written to the
-  **Invalid Data** sheet of the Validation Report with a specific reason.
-  There is no age cutoff — every record that passes validation goes on the
-  list, however old the application. Note that a **future-dated**
-  `application_date` therefore still passes validation; it produces a
-  negative `days_since_applied` and sorts to the bottom of the list, but it
-  is not rejected. Treat a negative value as an upstream export error worth
-  raising with Globe.
+  format, missing name, duplicates) are written to the **Invalid Data**
+  sheet of the Validation Report with a specific reason. There is no age or
+  recency cutoff — the input carries no application date, so every record
+  that passes phone/name/duplicate validation goes on the list. Any
+  filtering by application age has to happen upstream, before Globe hands
+  over the file.
 - **`call_logs` schema varies by agent.** Some agents store it as
   `{"metrics": {"total_duration_ms": ...}}`. Others store it as a list of
   turn-by-turn bot/user events instead — a different shape entirely.

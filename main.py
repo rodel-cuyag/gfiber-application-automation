@@ -9,8 +9,8 @@ Usage:
     python main.py --mode eod --agent-id 1595                                                       # EOD mode, today (PHT)
     python main.py --mode eod --agent-id 1595 --start-date 2026-08-25 --end-date 2026-08-29         # EOD mode, a date range
 
-    python main.py --mode contact-list                                  # Contact List mode, as-of today (PHT)
-    python main.py --mode contact-list --as-of-date 2026-08-26          # Contact List mode, as-of a specific date
+    python main.py --mode contact-list                                  # Contact List mode, stamped with today (PHT)
+    python main.py --mode contact-list --as-of-date 2026-08-26          # Contact List mode, stamped with a specific date
     python main.py --mode contact-list --input path/to/other_list.xlsx  # override the input file
 """
 
@@ -50,8 +50,8 @@ def parse_args():
     # --- Mode 2 (contact-list) args ---
     parser.add_argument(
         "--as-of-date", type=str, default=None,
-        help="[contact-list mode] Reference date (YYYY-MM-DD) used to compute days_since_applied. "
-             "Defaults to today in PHT.",
+        help="[contact-list mode] Report date (YYYY-MM-DD) used to stamp the output folder "
+             "and filenames. Defaults to today in PHT.",
     )
     parser.add_argument(
         "--input", type=str, default=None,
@@ -150,13 +150,14 @@ def run_contact_list(as_of_date=None, input_path=None):
     # 2. Validate required headers.
     data_loader.validate_contact_list_headers(raw_df)
 
-    # 3. Default as-of-date to today in PHT if not given.
+    # 3. Default the report date to today in PHT if not given. It only
+    #    stamps the output folder and filenames.
     if as_of_date is None:
         as_of_date = pd.Timestamp.now(tz=config.TIMEZONE).date()
         print(f"No --as-of-date given, defaulting to today (PHT): {as_of_date}")
 
     # 4. Validate and categorize every record.
-    categories = contact_list.categorize_records(raw_df, as_of_date)
+    categories = contact_list.categorize_records(raw_df)
 
     # 5. Build summary statistics.
     total = len(raw_df)
@@ -187,10 +188,8 @@ def run_contact_list(as_of_date=None, input_path=None):
 
     contact_path = None
 
-    # All valid records for CSV output, oldest abandoned application first.
-    all_records = categories["valid"].sort_values(
-        "days_since_applied", ascending=False,
-    ).reset_index(drop=True)
+    # All valid records for CSV output, in input file order.
+    all_records = categories["valid"].copy()
     all_records["ref_id"] = config.CONTACT_LIST_REF_ID
 
     if not all_records.empty:
@@ -210,7 +209,7 @@ def run_contact_list(as_of_date=None, input_path=None):
         "summary": summary_df,
         "invalid": categories["invalid"],
     }
-    excel_writer.write_validation_report(sheets, validation_path, date_columns=["application_date"])
+    excel_writer.write_validation_report(sheets, validation_path)
     print(f"Validation report generated: {validation_path}")
 
     # 7. Archive the input file (only if it was auto-discovered, not an
