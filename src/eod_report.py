@@ -51,6 +51,12 @@ def build_eod_report(call_detail_log: pd.DataFrame, start_date, end_date, agent_
     def count(column, value):
         return (connected_calls[column] == value).sum()
 
+    def count_by_postpaid(column, value, postpaid_value):
+        return (
+            (connected_calls[column] == value)
+            & (connected_calls["Postpaid Status"] == postpaid_value)
+        ).sum()
+
     contacted = count("Participated Call", "Yes")
 
     identity_confirmed = count("Identity Confirmed", "Yes")
@@ -64,6 +70,19 @@ def build_eod_report(call_detail_log: pd.DataFrame, start_date, end_date, agent_
     no_longer_interested = count("Application Intent", "no_longer_interested")
     already_completed = count("Application Intent", "already_completed")
 
+    # Intent broken down by customer segment — an Application Intent x
+    # Postpaid Status cross-tab, deliberately independent of the
+    # final_disposition-derived Postpaid/Non-Postpaid Conversion rows below:
+    # the two pairs answer different questions and may legitimately differ.
+    # These sub-counts won't always sum back to their total, since a call
+    # with a blank Postpaid Status falls into neither segment.
+    wishes_to_proceed_postpaid = count_by_postpaid("Application Intent", "proceed", "postpaid")
+    wishes_to_proceed_non_postpaid = count_by_postpaid("Application Intent", "proceed", "non_postpaid")
+    no_longer_interested_postpaid = count_by_postpaid("Application Intent", "no_longer_interested", "postpaid")
+    no_longer_interested_non_postpaid = count_by_postpaid("Application Intent", "no_longer_interested", "non_postpaid")
+    already_completed_postpaid = count_by_postpaid("Application Intent", "already_completed", "postpaid")
+    already_completed_non_postpaid = count_by_postpaid("Application Intent", "already_completed", "non_postpaid")
+
     endorsed = count("Endorsed for Work Order", "Yes")
     lead_outbound = count("Lead for Outbound Handling", "Yes")
     lead_email = count("Lead for Email Remarketing", "Yes")
@@ -75,11 +94,6 @@ def build_eod_report(call_detail_log: pd.DataFrame, start_date, end_date, agent_
     non_completion_price = count("Non-Completion Reason", "price")
     non_completion_competitor = count("Non-Completion Reason", "competitor")
     competitor_identified = count("Competitor Detected", "Yes")
-    # NOTE: the agent's own "Provider Availed" KPI is bound to a field named
-    # provider_availed, which it never emits — competitor_name is the real
-    # field carrying the provider, so that is what we count here.
-    provider_availed_pldt = count("Competitor Name", "pldt")
-    reason_for_switch_price = count("Reason for Switch", "price")
 
     repeat_requested = count("Repeat Requested", "Yes")
     identity_reasked = count("Identity Re-asked (defect)", "Yes")
@@ -87,6 +101,18 @@ def build_eod_report(call_detail_log: pd.DataFrame, start_date, end_date, agent_
 
     connection_rate = round((connected / dialed) * 100, 1) if dialed else 0.0
     conversion_rate = round((wishes_to_proceed / connected) * 100, 1) if connected else 0.0
+
+    # Share-of-connected percentages. Connected is the right denominator for
+    # all of these: every KPI-derived count above is already connected-only,
+    # so the base and the numerator come from the same population.
+    def pct_of_connected(n):
+        return round((n / connected) * 100, 1) if connected else 0.0
+
+    postpaid_pct = pct_of_connected(postpaid)
+    non_postpaid_pct = pct_of_connected(non_postpaid)
+    endorsed_pct = pct_of_connected(endorsed)
+    lead_outbound_pct = pct_of_connected(lead_outbound)
+    lead_email_pct = pct_of_connected(lead_email)
 
     # Calculate durations
     durations = range_log["Call Duration (sec)"].dropna()
@@ -129,19 +155,30 @@ def build_eod_report(call_detail_log: pd.DataFrame, start_date, end_date, agent_
         ("Consented to Continue and Recording", consented),
         ("Declined Recording", declined_recording),
         ("Postpaid Verified", postpaid),
+        ("Postpaid Customers % (of Connected)", f"{postpaid_pct}%"),
         ("Non-Postpaid Verified", non_postpaid),
+        ("Non-Postpaid Customers % (of Connected)", f"{non_postpaid_pct}%"),
         ("", ""),  # Blank row
 
         # Intent Outcomes
         ("Wishes to Proceed", wishes_to_proceed),
+        ("Wishes to Proceed - Postpaid", wishes_to_proceed_postpaid),
+        ("Wishes to Proceed - Non-Postpaid", wishes_to_proceed_non_postpaid),
         ("No Longer Interested", no_longer_interested),
+        ("No Longer Interested - Postpaid", no_longer_interested_postpaid),
+        ("No Longer Interested - Non-Postpaid", no_longer_interested_non_postpaid),
         ("Application Already Completed", already_completed),
+        ("Application Already Completed - Postpaid", already_completed_postpaid),
+        ("Application Already Completed - Non-Postpaid", already_completed_non_postpaid),
         ("", ""),  # Blank row
 
         # Endorsement & Leads
         ("Endorsed for Work Order", endorsed),
+        ("Endorsed for Work Order % (of Connected)", f"{endorsed_pct}%"),
         ("Lead for Outbound Handling", lead_outbound),
+        ("Lead for Outbound Handling % (of Connected)", f"{lead_outbound_pct}%"),
         ("Email Remarketing Tagged", lead_email),
+        ("Email Remarketing % (of Connected)", f"{lead_email_pct}%"),
         ("", ""),  # Blank row
 
         # Final Dispositions
@@ -160,8 +197,6 @@ def build_eod_report(call_detail_log: pd.DataFrame, start_date, end_date, agent_
         ("Non-Completion - Price", non_completion_price),
         ("Non-Completion - Competitor", non_completion_competitor),
         ("Competitor Identified", competitor_identified),
-        ("Provider Availed - PLDT", provider_availed_pldt),
-        ("Reason for Switch - Price", reason_for_switch_price),
         ("", ""),  # Blank row
 
         # Quality

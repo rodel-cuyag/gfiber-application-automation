@@ -171,10 +171,17 @@ same date-or-range.
 **Report structure:** the workbook has 2 sheets. **EOD Report** is a
 dashboard-style summary — one row per metric for the whole period (not one
 row per day) — with a Today/Yesterday/Δ comparison table, grouped into
-sections: call volume, **FUNNEL** (identity → consent → postpaid),
+sections: call volume, **FUNNEL** (identity → consent → postpaid, with
+postpaid / non-postpaid share-of-connected percentages),
 **OUTCOMES** (intent, endorsement, leads, final dispositions),
 **NON-COMPLETION & COMPETITOR**, **QUALITY**, then the manually-filled
 FINOPS / ISSUES & CHANGES / TOMORROW'S PLAN blocks.
+
+In **OUTCOMES**, each of the three intent results (Wishes to Proceed, No
+Longer Interested, Application Already Completed) is reported as a combined
+total followed by a `- Postpaid` / `- Non-Postpaid` breakdown, and Endorsed
+for Work Order, Lead for Outbound Handling, and Email Remarketing Tagged each
+carry a `% (of Connected)` row beneath the count.
 
 For single-day runs, **Yesterday** is best-effort filled in by reading back
 the previous day's already-generated EOD workbook (see `src/prior_day.py`) —
@@ -199,7 +206,15 @@ Failed) come from every row in the period. Every KPI-derived count
 (identity, consent, postpaid, intent, endorsement, competitor, quality) is
 counted from **connected calls only**, so the funnel and the rates built on
 it stay honest — a no-answer call can't have confirmed an identity or stated
-an intent.
+an intent. Every percentage metric on the sheet uses **Calls Connected** as
+its denominator, the one exception being Connection Rate, which is over
+Calls Dialled. The `- Postpaid` / `- Non-Postpaid` sub-rows are an
+`Application Intent × Postpaid Status` cross-tab and won't always sum back to
+their parent total — a connected call whose postpaid status the agent never
+established belongs to neither segment. They're also independent of the
+`final_disposition`-derived **Postpaid Conversion** / **Non-Postpaid
+Conversion** rows, which answer a different question and may legitimately
+differ.
 
 **Also generated:** a companion `GFiber_Application_EOD_Validation_{agent_id}_{date}.xlsx`
 workbook is written alongside the EOD Report on every run, in the same
@@ -350,10 +365,13 @@ with `"; "`.
 - **The agent's "Provider Availed" KPI is bound to a field it never emits.**
   In the agent config, that KPI's `outputFieldName` is `provider_availed`,
   but no such key exists among the 24 `conversation_metrics` — the real
-  field carrying the provider is `competitor_name`. This report's
-  **Provider Availed - PLDT** row reads `competitor_name`, so the number
-  here is correct; the agent's own KPI dashboard is the thing reading
-  nothing. Worth raising with Globe to get the binding fixed.
+  field carrying the provider is `competitor_name`. The EOD Report no longer
+  surfaces an aggregate row for it (the old **Provider Availed - PLDT** and
+  **Reason for Switch - Price** rows were single-value slices hardcoded to
+  one competitor and one reason, so they were dropped), but the underlying
+  `competitor_name` and `reason_for_switch` values are still visible
+  per-call in the **Call Detail Log**. The binding bug itself is unfixed on
+  the agent side and still worth raising with Globe.
 - **LLM Inference Cost, P0/P1 issue counts, and several other EOD Report
   fields** are left blank — no source data currently supports them.
   This is separate from `N/A`, which only appears in the Call

@@ -190,6 +190,12 @@ def _build_calculation_audit(detail_log, eod_df, start_date, end_date):
     def count(column, value):
         return int((connected_calls[column] == value).sum())
 
+    def count_by_postpaid(column, value, postpaid_value):
+        return int((
+            (connected_calls[column] == value)
+            & (connected_calls["Postpaid Status"] == postpaid_value)
+        ).sum())
+
     contacted = count("Participated Call", "Yes")
     identity_confirmed = count("Identity Confirmed", "Yes")
     wrong_customer = count("Identity Confirmed", "No")
@@ -205,8 +211,24 @@ def _build_calculation_audit(detail_log, eod_df, start_date, end_date):
     lead_email = count("Lead for Email Remarketing", "Yes")
     competitor_identified = count("Competitor Detected", "Yes")
 
+    proceed_postpaid = count_by_postpaid("Application Intent", "proceed", "postpaid")
+    proceed_non_postpaid = count_by_postpaid("Application Intent", "proceed", "non_postpaid")
+    nli_postpaid = count_by_postpaid("Application Intent", "no_longer_interested", "postpaid")
+    nli_non_postpaid = count_by_postpaid("Application Intent", "no_longer_interested", "non_postpaid")
+    completed_postpaid = count_by_postpaid("Application Intent", "already_completed", "postpaid")
+    completed_non_postpaid = count_by_postpaid("Application Intent", "already_completed", "non_postpaid")
+
     conn_rate_val = round((connected / dialed) * 100, 1) if dialed else 0.0
     conv_rate_val = round((proceed / connected) * 100, 1) if connected else 0.0
+
+    def pct_of_connected(n):
+        return round((n / connected) * 100, 1) if connected else 0.0
+
+    postpaid_pct = pct_of_connected(postpaid)
+    non_postpaid_pct = pct_of_connected(non_postpaid)
+    endorsed_pct = pct_of_connected(endorsed)
+    lead_outbound_pct = pct_of_connected(lead_outbound)
+    lead_email_pct = pct_of_connected(lead_email)
 
     dur = range_log["Call Duration (sec)"].dropna()
     total_sec = int(dur.sum()) if not dur.empty else 0
@@ -350,6 +372,56 @@ def _build_calculation_audit(detail_log, eod_df, start_date, end_date):
              "Failed + No Answer + Busy + System Errors",
              f"{failed} + {no_answer} + {busy} + {system_errors} = {retries}",
              retries, "Retries Queued for Tomorrow")
+
+    # Intent x segment cross-tab. These won't sum back to their parent
+    # total when some connected calls carry a blank Postpaid Status.
+    add_step(27, "Wishes to Proceed - Postpaid",
+             "COUNTIFS(Status='Connected', Application Intent='proceed', Postpaid Status='postpaid')",
+             f"{proceed} proceed, {proceed_postpaid} postpaid",
+             proceed_postpaid, "Wishes to Proceed - Postpaid")
+    add_step(28, "Wishes to Proceed - Non-Postpaid",
+             "COUNTIFS(Status='Connected', Application Intent='proceed', Postpaid Status='non_postpaid')",
+             f"{proceed} proceed, {proceed_non_postpaid} non_postpaid",
+             proceed_non_postpaid, "Wishes to Proceed - Non-Postpaid")
+    add_step(29, "No Longer Interested - Postpaid",
+             "COUNTIFS(Status='Connected', Application Intent='no_longer_interested', Postpaid Status='postpaid')",
+             f"{no_longer_interested} no_longer_interested, {nli_postpaid} postpaid",
+             nli_postpaid, "No Longer Interested - Postpaid")
+    add_step(30, "No Longer Interested - Non-Postpaid",
+             "COUNTIFS(Status='Connected', Application Intent='no_longer_interested', Postpaid Status='non_postpaid')",
+             f"{no_longer_interested} no_longer_interested, {nli_non_postpaid} non_postpaid",
+             nli_non_postpaid, "No Longer Interested - Non-Postpaid")
+    add_step(31, "Application Already Completed - Postpaid",
+             "COUNTIFS(Status='Connected', Application Intent='already_completed', Postpaid Status='postpaid')",
+             f"{already_completed} already_completed, {completed_postpaid} postpaid",
+             completed_postpaid, "Application Already Completed - Postpaid")
+    add_step(32, "Application Already Completed - Non-Postpaid",
+             "COUNTIFS(Status='Connected', Application Intent='already_completed', Postpaid Status='non_postpaid')",
+             f"{already_completed} already_completed, {completed_non_postpaid} non_postpaid",
+             completed_non_postpaid, "Application Already Completed - Non-Postpaid")
+
+    # Share-of-connected percentages. Computed values carry the "%" suffix
+    # so they compare equal to the string the EOD Report writes.
+    add_step(33, "Postpaid Customers %",
+             "(Postpaid Verified / Connected) x 100",
+             f"{postpaid} / {connected}" if connected else "N/A",
+             f"{postpaid_pct}%", "Postpaid Customers % (of Connected)")
+    add_step(34, "Non-Postpaid Customers %",
+             "(Non-Postpaid Verified / Connected) x 100",
+             f"{non_postpaid} / {connected}" if connected else "N/A",
+             f"{non_postpaid_pct}%", "Non-Postpaid Customers % (of Connected)")
+    add_step(35, "Endorsed for Work Order %",
+             "(Endorsed for Work Order / Connected) x 100",
+             f"{endorsed} / {connected}" if connected else "N/A",
+             f"{endorsed_pct}%", "Endorsed for Work Order % (of Connected)")
+    add_step(36, "Lead for Outbound Handling %",
+             "(Lead for Outbound Handling / Connected) x 100",
+             f"{lead_outbound} / {connected}" if connected else "N/A",
+             f"{lead_outbound_pct}%", "Lead for Outbound Handling % (of Connected)")
+    add_step(37, "Email Remarketing %",
+             "(Email Remarketing Tagged / Connected) x 100",
+             f"{lead_email} / {connected}" if connected else "N/A",
+             f"{lead_email_pct}%", "Email Remarketing % (of Connected)")
 
     return pd.DataFrame(rows)
 
