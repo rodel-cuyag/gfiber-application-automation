@@ -1,6 +1,4 @@
 """
-excel_writer.py
------------------
 Writes report DataFrames into formatted .xlsx workbooks using openpyxl.
 
 Note: values here are pre-computed in Python (not live Excel formulas).
@@ -85,7 +83,7 @@ def _dash_banner(title, parent_source=None, tier=1):
 # to pull the "Today" value from (written as a literal value, not a
 # formula), and any special styling. "Failed" and "Total Completed Calls"
 # are included even though the reference dashboard doesn't show them, for
-# consistency with the metrics computed elsewhere (see plan doc).
+# consistency with the metrics computed elsewhere.
 DASHBOARD_ROWS = [
     _dash_row("Calls Dialled - Target", "Calls Dialed - Target", yellow=True),
     _dash_row("Calls Dialled - Actual", "Calls Dialed - Actual"),
@@ -189,7 +187,7 @@ COUNT_FORMAT_SOURCES = {
 }
 
 # Call Detail Log column widths, keyed by column NAME rather than letter so
-# the mapping survives any reordering of the log's 30 columns. Unlisted
+# the mapping survives any reordering of the log's columns. Unlisted
 # columns keep the auto-computed width from _write_dataframe.
 CALL_DETAIL_LOG_COLUMN_WIDTHS = {
     "Conversation ID": 40,
@@ -276,7 +274,7 @@ def _write_eod_summary_sheet(ws, eod_df: pd.DataFrame, previous_day_values: dict
     from. "System Errors" is the one live formula, referencing the Target/
     Actual rows on this same sheet.
 
-    Yesterday (Column C) is filled in for the core dashboard rows (5-18)
+    Yesterday (Column C) is filled in for the rows above the FINOPS section
     from *previous_day_values* (a {label: value} lookup from the previous
     day's saved report — see prior_day.py) when available, else left
     blank. Delta (Column D) becomes a live Excel formula for those same

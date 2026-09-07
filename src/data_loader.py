@@ -1,6 +1,4 @@
 """
-data_loader.py
---------------
 Responsible for ONE thing: reading the raw input files off disk into
 pandas DataFrames. No cleaning, no merging, no business logic here —
 that lives in preprocessing.py (EOD mode) / contact_list.py (Contact

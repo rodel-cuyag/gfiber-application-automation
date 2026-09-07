@@ -32,7 +32,10 @@ Generates one of two reports:
 3. **Open a terminal inside VS Code**
    `Terminal → New Terminal` (or `` Ctrl+` ``).
 
-4. **Create a virtual environment** (see "Do we need venv?" below for why):
+4. **Create a virtual environment** — recommended, and worth the two extra
+   commands: it keeps this project's `pandas`/`openpyxl` versions separate from
+   anything else on your machine, so upgrading a package for a different
+   project later can't silently break this script (or vice versa).
 ```bash
    python -m venv venv
 ```
@@ -91,14 +94,6 @@ Generates one of two reports:
 | VS Code + Python extension | Editor / debugger |
 | `venv` (built into Python, no separate install) | Isolated dependency environment |
 
-## Do we need venv?
-
-**Yes, recommended.** It keeps `pandas`/`openpyxl` versions for this project
-separate from anything else on your machine, so upgrading a package for a
-different project later can't silently break this script (or vice versa).
-It's a couple of extra terminal commands (steps 4–5 above) for meaningfully
-safer long-term maintenance — worth it even for a small script like this.
-
 ---
 
 ## 3. Project structure (modular by design)
@@ -121,7 +116,7 @@ gfiber-application-automation/
 │   └── eod/
 │       └── {date-or-range}_{HHMMSS}/   → the 3 source CSVs used for that run
 ├── src/
-│   ├── config.py              → all settings in one place (paths, timezone, filename templates, required headers, ref_id)
+│   ├── config.py              → all settings in one place (paths, timezone, filename templates, required headers)
 │   ├── validators.py          → validates date CLI args (--start-date/--end-date, --as-of-date) and --agent-id
 │   ├── data_loader.py         → auto-discovers input files by column headers; validates required headers are present
 │   ├── archiver.py            → moves processed input files into archive/ after a successful run
@@ -164,9 +159,9 @@ python main.py --mode eod --agent-id 1595 --start-date 2026-08-29 --end-date 202
 
 **Output naming:** single-day → `GFiber_Application_EOD_Report_{agent_id}_{date}.xlsx`;
 multi-day → `GFiber_Application_EOD_Report_{agent_id}_{start}_to_{end}.xlsx`.
-Lands in `output/eod/{date-or-range}/{HH-MM-SS}/`, where `{HH-MM-SS}` is the
-run's clock time — each run of the tool gets its own subfolder, even for the
-same date-or-range.
+Lands in `output/eod/{date-or-range}/{HH-MM-SS}/` — a date-stamped subfolder for
+the report period, with a further subfolder named for the run's clock time, so
+reruns for the same period never mix their files together.
 
 **Report structure:** the workbook has 2 sheets. **EOD Report** is a
 dashboard-style summary — one row per metric for the whole period (not one
@@ -209,13 +204,13 @@ carry a `% (of Connected)` row beneath the count.
 **NON-COMPLETION & COMPETITOR** ends with a `Competitor Identified
 Breakdown — N` banner splitting that total by named provider — the banner is
 the only place that total appears, so there's no separate `Competitor
-Identified` row above it. The rows are part fixed, part data-driven: the
-providers the agent config enumerates (PLDT, Converge, Starlink, Sky, DITO,
-Smart) always render, zeros included, so the row set stays stable for the
-Yesterday/Δ lookup; any write-in provider found in the data gets its own row
-after them; then the `Others` residual; and `Undisclosed` closes the block,
-since it names no provider and so doesn't belong among the real competitors.
-See the counting rule below for why the write-in rows exist.
+Identified` row above it. Row order: the providers the agent config enumerates
+(PLDT, Converge, Starlink, Sky, DITO, Smart) always render, zeros included, so
+the row set stays stable for the Yesterday/Δ lookup; then any write-in provider
+found in the data; then the `Others` residual; and `Undisclosed` closes the
+block, since it names no provider and so doesn't belong among the real
+competitors. See **Competitor breakdown** below for why the write-in rows exist
+and how `Others` is derived.
 
 For single-day runs, **Yesterday** is best-effort filled in by reading back
 the previous day's already-generated EOD workbook (see `src/prior_day.py`) —
@@ -234,9 +229,7 @@ The prior-day lookup keys each row by *(enclosing band, label)* rather than
 by label alone, because display labels repeat — "Wishes to Proceed" appears
 under both the Postpaid and Non-Postpaid breakdown banners as well as in
 OUTCOMES, and keying on the label alone would give all three the same
-Yesterday value. One consequence when upgrading: a prior report generated
-before the FUNNEL restructure has no bands to key against, so FUNNEL and
-OUTCOMES rows show a blank Yesterday for exactly one run, then self-heal.
+Yesterday value.
 
 **Call Detail Log** lists every call in the period across 28 columns — one
 per field the agent emits in `outputJson`, plus the Twilio status, duration,
@@ -343,14 +336,13 @@ Three input formats are accepted, all normalizing to the same `+63XXXXXXXXXX`:
 - `09` + 9 digits (11 digits total), e.g. `09987665432` → `+639987665432`
 - `9` + 9 digits (10 digits total), e.g. `9987665432` → `+639987665432`
 
-**Output:** two files in `output/contact_list/{date}/{HH-MM-SS}/` (a date-stamped
-subfolder, with a further run-time-stamped subfolder per run):
+**Output:** two files in `output/contact_list/{date}/{HH-MM-SS}/`, following the
+same date-plus-run-time subfolder scheme as EOD mode:
 
 - `GFiber_Application_Contact_List_{date}.csv` — every record that passes
   validation, in **input file order** (there's no priority signal to sort
-  on, so the order Globe supplied is preserved). Three columns:
-  `customer_phone` (normalized to `+63XXXXXXXXXX`), `user`, and `ref_id`
-  (constant value from `config.CONTACT_LIST_REF_ID`, currently `GOCUC20`).
+  on, so the order Globe supplied is preserved). Two columns:
+  `customer_phone` (normalized to `+63XXXXXXXXXX`) and `user`.
 - `GFiber_Application_Validation_Report_{date}.xlsx` — data validation +
   categorization (2 sheets: Summary, Invalid Data)
 
@@ -431,10 +423,10 @@ with `"; "`.
 - **Contact List mode validates every record.** Invalid records (bad phone
   format, missing name, duplicates) are written to the **Invalid Data**
   sheet of the Validation Report with a specific reason. There is no age or
-  recency cutoff — the input carries no application date, so every record
-  that passes phone/name/duplicate validation goes on the list. Any
-  filtering by application age has to happen upstream, before Globe hands
-  over the file.
+  recency cutoff — the pipeline reads only `customer_phone` and `user` and
+  ignores every other column in the input, so every record that passes
+  phone/name/duplicate validation goes on the list. Any filtering by
+  application age has to happen upstream, before Globe hands over the file.
 - **`call_logs` schema varies by agent.** Some agents store it as
   `{"metrics": {"total_duration_ms": ...}}`. Others store it as a list of
   turn-by-turn bot/user events instead — a different shape entirely.
@@ -448,15 +440,13 @@ with `"; "`.
   **Competitor Identified Breakdown** reads `competitor_name` directly, so
   the numbers here are correct; the agent's own KPI dashboard is the thing
   reading nothing. The binding bug is unfixed on the agent side and still
-  worth raising with Globe. (The old **Provider Availed - PLDT** and
-  **Reason for Switch - Price** rows were single-value slices hardcoded to
-  one competitor and one reason; the breakdown replaced the first, and
-  `reason_for_switch` remains visible per-call in the **Call Detail Log**.)
-- **Unfamiliar competitor names in the breakdown are expected.** The agent is
-  told to write in a provider's name verbatim when it isn't one of the six
-  it knows, so rows like "Royal Cable" can appear on any given day. That is
-  the agent working as configured, not a data error — but a name that looks
-  like a misheard transcription is worth checking against the call.
+  worth raising with Globe.
+- **Unfamiliar competitor names in the breakdown are expected** — the agent
+  writes in a provider's name verbatim when it isn't one of the six it knows
+  (see **Competitor breakdown** in §4), so rows like "Royal Cable" can appear
+  on any given day. That's the agent working as configured, not a data error —
+  but a name that looks like a misheard transcription is worth checking
+  against the call.
 - **LLM Inference Cost, P0/P1 issue counts, and several other EOD Report
   fields** are left blank — no source data currently supports them.
   This is separate from `N/A`, which only appears in the Call
