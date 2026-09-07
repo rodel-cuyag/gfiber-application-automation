@@ -17,6 +17,8 @@ from openpyxl.formatting.rule import FormulaRule
 from openpyxl.utils import get_column_letter
 import pandas as pd
 
+from src.eod_report import COMPETITOR_METRIC_PREFIX
+
 HEADER_FILL = PatternFill("solid", start_color="1F4E78", end_color="1F4E78")
 HEADER_FONT = Font(name="Arial", bold=True, color="FFFFFF")
 BODY_FONT = Font(name="Arial")
@@ -37,15 +39,45 @@ DASH_PURPLE_TEXT = "7B5EA7"
 DASH_GREEN_FILL = "00B050"
 DASH_RED_FILL = "C00000"
 
+DASH_BANNER_1 = "5B9BD5"  # tier-1 breakdown banner (white bold text)
+DASH_BANNER_2 = "8EB4E3"  # tier-2 breakdown banner (navy bold text)
+
+# Separates a breakdown banner's title from its parent total, e.g.
+# "Calls Connected Breakdown — 57". prior_day.py splits on this to recover
+# the stable part of the title, so the two must agree — import it, don't
+# retype the em dash.
+BANNER_SEP = " — "
+
 _THIN = Side(style="thin")
 _FULL_BORDER = Border(top=_THIN, bottom=_THIN, left=_THIN, right=_THIN)
 
 
-def _dash_row(label, source=None, highlight=False, yellow=False, no_delta=False, special=None, percent_delta=False):
+def _dash_row(label, source=None, highlight=False, yellow=False, no_delta=False,
+              special=None, percent_delta=False, indent=0):
     return {
         "label": label, "source": source, "highlight": highlight,
         "yellow": yellow, "no_delta": no_delta, "special": special,
-        "percent_delta": percent_delta,
+        "percent_delta": percent_delta, "indent": indent, "banner": None,
+        "tier": 0,
+    }
+
+
+def _dash_banner(title, parent_source=None, tier=1):
+    """
+    A "<title> — <parent total>" band spanning the full A:D width, opening a
+    group of indented child rows beneath it. *parent_source* names the metric
+    whose value is appended after BANNER_SEP; omit it for a pure grouping
+    band with no single parent total (used in OUTCOMES).
+
+    Banners write nothing to columns B-D. Nothing is lost by that: every
+    banner total also appears as an ordinary data row elsewhere on the
+    sheet, where it keeps its Yesterday/Δ treatment.
+    """
+    return {
+        "label": "__BANNER__", "source": None, "highlight": False,
+        "yellow": False, "no_delta": False, "special": None,
+        "percent_delta": False, "indent": 0, "banner": title,
+        "tier": tier, "parent_source": parent_source,
     }
 
 
@@ -57,50 +89,62 @@ def _dash_row(label, source=None, highlight=False, yellow=False, no_delta=False,
 DASHBOARD_ROWS = [
     _dash_row("Calls Dialled - Target", "Calls Dialed - Target", yellow=True),
     _dash_row("Calls Dialled - Actual", "Calls Dialed - Actual"),
+    # Sits directly under the two rows its formula subtracts.
+    _dash_row("System Errors", special="system_errors"),
     _dash_row("Calls Connected", "Calls Connected", highlight=True),
     _dash_row("No Answer", "No Answer"),
     _dash_row("Busy", "Busy"),
     _dash_row("Failed", "Failed"),
-    _dash_row("System Errors", special="system_errors"),
-    _dash_row("Contacted", "Contacted"),
     _dash_row("Total Completed Calls", "Total Completed Calls"),
     _dash_row("Total Call Duration (minutes)", "Total Call Duration (minutes)"),
     _dash_row("Avg. Call Duration - Connected (seconds)", "Avg. Call Duration - Connected (seconds)"),
-    _dash_row("Connection Rate (Connected / Dialled)", "Connection Rate (Connected / Dialed)", highlight=True, percent_delta=True),
+    _dash_row("Connection Rate (Connected / Actual Dialled)", "Connection Rate (Connected / Dialed)", highlight=True, percent_delta=True),
     _dash_row("__SECTION__", special="FUNNEL"),
-    _dash_row("Identity Confirmed", "Identity Confirmed", highlight=True),
-    _dash_row("Wrong Customer", "Wrong Customer"),
-    _dash_row("Consented to Continue and Recording", "Consented to Continue and Recording", highlight=True),
-    _dash_row("Declined Recording", "Declined Recording"),
-    _dash_row("Postpaid Verified", "Postpaid Verified"),
-    _dash_row("Postpaid Customers % (of Connected)", "Postpaid Customers % (of Connected)", percent_delta=True),
-    _dash_row("Non-Postpaid Verified", "Non-Postpaid Verified"),
-    _dash_row("Non-Postpaid Customers % (of Connected)", "Non-Postpaid Customers % (of Connected)", percent_delta=True),
+    _dash_banner("Calls Connected Breakdown", "Calls Connected"),
+    _dash_row("Identity Confirmed", "Identity Confirmed", indent=1, highlight=True),
+    _dash_row("Wrong Customer", "Wrong Customer", indent=1),
+    _dash_banner("Identity Confirmed Breakdown", "Identity Confirmed"),
+    _dash_row("Consented to Continue and Recording", "Consented to Continue and Recording", indent=1, highlight=True),
+    _dash_row("Declined Recording", "Declined Recording", indent=1),
+    _dash_banner("Consented to Continue and Recording Breakdown", "Consented to Continue and Recording"),
+    _dash_row("Postpaid", "Postpaid Verified", indent=1),
+    _dash_row("Postpaid % (of Consented)", "Postpaid Customers % (of Consented)", indent=1, percent_delta=True),
+    _dash_row("Non-Postpaid", "Non-Postpaid Verified", indent=1),
+    _dash_row("Non-Postpaid % (of Consented)", "Non-Postpaid Customers % (of Consented)", indent=1, percent_delta=True),
+    _dash_banner("Postpaid Breakdown", "Postpaid Verified", tier=2),
+    _dash_row("Wishes to Proceed", "Wishes to Proceed - Postpaid", indent=2),
+    _dash_row("No Longer Interested", "No Longer Interested - Postpaid", indent=2),
+    _dash_row("Application Already Completed", "Application Already Completed - Postpaid", indent=2),
+    _dash_banner("Non-Postpaid Breakdown", "Non-Postpaid Verified", tier=2),
+    _dash_row("Wishes to Proceed", "Wishes to Proceed - Non-Postpaid", indent=2),
+    _dash_row("No Longer Interested", "No Longer Interested - Non-Postpaid", indent=2),
+    _dash_row("Application Already Completed", "Application Already Completed - Non-Postpaid", indent=2),
     _dash_row("__SECTION__", special="OUTCOMES"),
-    _dash_row("Wishes to Proceed", "Wishes to Proceed", highlight=True),
-    _dash_row("Wishes to Proceed - Postpaid", "Wishes to Proceed - Postpaid"),
-    _dash_row("Wishes to Proceed - Non-Postpaid", "Wishes to Proceed - Non-Postpaid"),
-    _dash_row("No Longer Interested", "No Longer Interested"),
-    _dash_row("No Longer Interested - Postpaid", "No Longer Interested - Postpaid"),
-    _dash_row("No Longer Interested - Non-Postpaid", "No Longer Interested - Non-Postpaid"),
-    _dash_row("Application Already Completed", "Application Already Completed"),
-    _dash_row("Application Already Completed - Postpaid", "Application Already Completed - Postpaid"),
-    _dash_row("Application Already Completed - Non-Postpaid", "Application Already Completed - Non-Postpaid"),
-    _dash_row("Conversion Rate (Proceed / Connected)", "Conversion Rate (Proceed / Connected)", highlight=True, percent_delta=True),
-    _dash_row("Endorsed for Work Order", "Endorsed for Work Order", highlight=True),
-    _dash_row("Endorsed for Work Order % (of Connected)", "Endorsed for Work Order % (of Connected)", percent_delta=True),
-    _dash_row("Lead for Outbound Handling", "Lead for Outbound Handling"),
-    _dash_row("Lead for Outbound Handling % (of Connected)", "Lead for Outbound Handling % (of Connected)", percent_delta=True),
-    _dash_row("Email Remarketing Tagged", "Email Remarketing Tagged"),
-    _dash_row("Email Remarketing % (of Connected)", "Email Remarketing % (of Connected)", percent_delta=True),
-    _dash_row("Postpaid Conversion", "Postpaid Conversion"),
-    _dash_row("Non-Postpaid Conversion", "Non-Postpaid Conversion"),
-    _dash_row("Not Available / No Consent", "Not Available / No Consent"),
-    _dash_row("Retries Queued for Tomorrow", "Retries Queued for Tomorrow"),
+    _dash_banner("Intent Outcomes"),
+    _dash_row("Wishes to Proceed", "Wishes to Proceed", indent=1, highlight=True),
+    _dash_row("No Longer Interested", "No Longer Interested", indent=1),
+    _dash_row("Application Already Completed", "Application Already Completed", indent=1),
+    _dash_banner("Conversion Rates"),
+    _dash_row("Conversion Rate (Proceed / Connected)", "Conversion Rate (Proceed / Connected)", indent=1, highlight=True, percent_delta=True),
+    _dash_row("Postpaid Conversion Rate", "Postpaid Conversion Rate", indent=1, percent_delta=True),
+    _dash_row("Non-Postpaid Conversion Rate", "Non-Postpaid Conversion Rate", indent=1, percent_delta=True),
+    _dash_banner("Endorsement & Leads"),
+    _dash_row("Endorsed for Work Order", "Endorsed for Work Order", indent=1, highlight=True),
+    _dash_row("Endorsed for Work Order % (of Connected)", "Endorsed for Work Order % (of Connected)", indent=1, percent_delta=True),
+    _dash_row("Lead for Outbound Handling", "Lead for Outbound Handling", indent=1),
+    _dash_row("Lead for Outbound Handling % (of Connected)", "Lead for Outbound Handling % (of Connected)", indent=1, percent_delta=True),
+    _dash_row("Email Remarketing Tagged", "Email Remarketing Tagged", indent=1),
+    _dash_row("Email Remarketing % (of Connected)", "Email Remarketing % (of Connected)", indent=1, percent_delta=True),
     _dash_row("__SECTION__", special="NON-COMPLETION & COMPETITOR"),
     _dash_row("Non-Completion - Price", "Non-Completion - Price"),
     _dash_row("Non-Completion - Competitor", "Non-Completion - Competitor"),
-    _dash_row("Competitor Identified", "Competitor Identified"),
+    # The Competitor Identified total shows in the banner below rather than
+    # as a row of its own; the banner reads it from the report data, so
+    # there's no sheet row for it to depend on.
+    _dash_banner("Competitor Identified Breakdown", "Competitor Identified"),
+    # Expansion marker, not a row: one count row per competitor metric
+    # found in the report, since the provider set is data-driven.
+    _dash_row("__COMPETITORS__", special="competitor_rows"),
     _dash_row("__SECTION__", special="QUALITY"),
     _dash_row("Repeat Requested (quality)", "Repeat Requested (quality)"),
     _dash_row("Identity Re-asked (defect)", "Identity Re-asked (defect)"),
@@ -126,7 +170,7 @@ DASHBOARD_ROWS = [
 # intentionally excluded.
 COUNT_FORMAT_SOURCES = {
     "Calls Dialed - Target", "Calls Dialed - Actual", "Calls Connected",
-    "No Answer", "Busy", "Failed", "Contacted", "Total Completed Calls",
+    "No Answer", "Busy", "Failed", "Total Completed Calls",
     "Identity Confirmed", "Wrong Customer",
     "Consented to Continue and Recording", "Declined Recording",
     "Postpaid Verified", "Non-Postpaid Verified",
@@ -139,10 +183,7 @@ COUNT_FORMAT_SOURCES = {
     "Application Already Completed - Non-Postpaid",
     "Endorsed for Work Order", "Lead for Outbound Handling",
     "Email Remarketing Tagged",
-    "Postpaid Conversion", "Non-Postpaid Conversion",
-    "Not Available / No Consent", "Retries Queued for Tomorrow",
     "Non-Completion - Price", "Non-Completion - Competitor",
-    "Competitor Identified",
     "Repeat Requested (quality)", "Identity Re-asked (defect)",
     "Opt-Out Requested",
 }
@@ -157,6 +198,29 @@ CALL_DETAIL_LOG_COLUMN_WIDTHS = {
     "Customer Questions & Concerns": 45,
     "Question Topics": 45,
 }
+
+
+def _expand_dashboard_rows(value_of: dict) -> list:
+    """
+    Resolves the data-driven markers in DASHBOARD_ROWS into concrete rows.
+
+    Only the competitor breakdown is dynamic: the provider set comes from
+    the data (see eod_report._build_competitor_rows), so its rows can't be
+    declared statically. eod_report emits them in display order and dicts
+    preserve insertion order, so iterating *value_of* reproduces that order
+    without duplicating the sorting logic here.
+    """
+    rows = []
+    for spec in DASHBOARD_ROWS:
+        if spec["special"] == "competitor_rows":
+            rows += [
+                _dash_row(key[len(COMPETITOR_METRIC_PREFIX):], key, indent=1)
+                for key in value_of
+                if isinstance(key, str) and key.startswith(COMPETITOR_METRIC_PREFIX)
+            ]
+            continue
+        rows.append(spec)
+    return rows
 
 
 def resolve_output_path(path: Path) -> Path:
@@ -221,6 +285,7 @@ def _write_eod_summary_sheet(ws, eod_df: pd.DataFrame, previous_day_values: dict
     those aren't derived from prior-day report data.
     """
     value_of = dict(eod_df.itertuples(index=False))
+    dashboard_rows = _expand_dashboard_rows(value_of)
     previous_day_values = previous_day_values or {}
     # The "core block" — everything with a real prior-day value to compare
     # against — runs up to FINOPS, not up to the first section header. The
@@ -228,14 +293,14 @@ def _write_eod_summary_sheet(ws, eod_df: pd.DataFrame, previous_day_values: dict
     # must keep their Yesterday/Delta columns; FINOPS onward is filled in by
     # hand, so those rows get the "[+/-N]" placeholder instead.
     first_section_idx = next(
-        i for i, s in enumerate(DASHBOARD_ROWS) if s["special"] == "FINOPS"
+        i for i, s in enumerate(dashboard_rows) if s["special"] == "FINOPS"
     )
 
     ws.merge_cells("A1:D1")
     title = ws["A1"]
     title.value = "End-of-Day Report"
     title.font = Font(name=DASH_FONT_NAME, size=36, color=DASH_NAVY)
-    title.alignment = Alignment(horizontal="center")
+    title.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 42
 
     subtitle = ws["A2"]
@@ -266,23 +331,54 @@ def _write_eod_summary_sheet(ws, eod_df: pd.DataFrame, previous_day_values: dict
     def _fill(color):
         return PatternFill("solid", start_color=color, end_color=color)
 
-    def _available(label):
-        return previous_day_values.get(label) not in (None, "")
+    # Display labels are not unique — "Wishes to Proceed" appears under the
+    # Postpaid and Non-Postpaid breakdown banners as well as in OUTCOMES —
+    # so the prior-day lookup is keyed by (enclosing banner, label). See
+    # prior_day.load_previous_day_values, which reconstructs the same key.
+    current_group = ""
+
+    def _available(label, group=""):
+        # Defaults to the ungrouped top block, which is where every label
+        # the formula rows below depend on (Dialled/No Answer/Busy/Failed)
+        # lives — not the banner the dependent row happens to sit under.
+        return previous_day_values.get((group, label)) not in (None, "")
+
+    def _band(row, text, fill_color, font, center=True):
+        """Writes a full-width A:D band — section divider or breakdown banner."""
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+        a = ws.cell(row=row, column=1, value=text)
+        a.font = font
+        if center:
+            a.alignment = Alignment(horizontal="center")
+        for col in (1, 2, 3, 4):
+            ws.cell(row=row, column=col).fill = _fill(fill_color)
+        a.border = Border(top=_THIN, bottom=_THIN, left=_THIN)
+        ws.cell(row=row, column=4).border = Border(top=_THIN, bottom=_THIN, right=_THIN)
 
     row_of = {}
-    system_errors_row = None
     body_row = 5
-    for idx, spec in enumerate(DASHBOARD_ROWS):
+    for idx, spec in enumerate(dashboard_rows):
         if spec["label"] == "__SECTION__":
-            ws.merge_cells(start_row=body_row, start_column=2, end_row=body_row, end_column=4)
-            a = ws.cell(row=body_row, column=1)
-            a.fill = navy_fill
-            a.border = Border(left=_THIN)
-            b = ws.cell(row=body_row, column=2, value=spec["special"])
-            b.font = header_font
-            for col in (2, 3, 4):
-                ws.cell(row=body_row, column=col).fill = navy_fill
-            ws.cell(row=body_row, column=4).border = Border(right=_THIN)
+            _band(body_row, spec["special"], DASH_NAVY, header_font)
+            current_group = spec["special"]
+            body_row += 1
+            continue
+
+        if spec["label"] == "__BANNER__":
+            title = spec["banner"]
+            text = title
+            if spec["parent_source"]:
+                total = value_of[spec["parent_source"]]
+                text = f"{title}{BANNER_SEP}{total}"
+            if spec["tier"] == 1:
+                color, font_color = DASH_BANNER_1, "FFFFFF"
+            else:
+                color, font_color = DASH_BANNER_2, DASH_NAVY
+            _band(body_row, text, color,
+                  Font(name=DASH_FONT_NAME, size=18, bold=True, color=font_color))
+            # Key off the stable title, never the value-bearing text — the
+            # total changes daily and would break the prior-day match.
+            current_group = title
             body_row += 1
             continue
 
@@ -302,16 +398,20 @@ def _write_eod_summary_sheet(ws, eod_df: pd.DataFrame, previous_day_values: dict
         a.font = label_font
         a.fill = _fill(band_color)
         a.border = _FULL_BORDER
+        if spec["indent"]:
+            a.alignment = Alignment(horizontal="left", indent=spec["indent"] * 2)
 
         if spec["special"] == "system_errors":
             value = f"=MAX(0,B{row_of['Calls Dialed - Target']}-B{row_of['Calls Dialed - Actual']})"
-            system_errors_row = body_row
-        elif spec["source"] == "Retries Queued for Tomorrow":
-            base_retries = value_of[spec["source"]]
-            value = f"=MAX(0,{base_retries}+B{system_errors_row})"
         else:
             value = value_of[spec["source"]]
-        is_count_row = spec["source"] in COUNT_FORMAT_SOURCES or spec["special"] == "system_errors"
+        # Competitor rows are counts too, but their sources are built at
+        # runtime so they can't be members of the static set.
+        is_count_row = (
+            spec["source"] in COUNT_FORMAT_SOURCES
+            or spec["special"] == "system_errors"
+            or str(spec["source"]).startswith(COMPETITOR_METRIC_PREFIX)
+        )
 
         b = ws.cell(row=body_row, column=2, value=value)
         b.font = value_font
@@ -329,13 +429,8 @@ def _write_eod_summary_sheet(ws, eod_df: pd.DataFrame, previous_day_values: dict
                 yesterday_value = (
                     f"=MAX(0,C{row_of['Calls Dialed - Target']}-C{row_of['Calls Dialed - Actual']})"
                 )
-        elif spec["source"] == "Retries Queued for Tomorrow":
-            if all(_available(lbl) for lbl in ("No Answer", "Busy", "Failed")):
-                yesterday_value = (
-                    f"=MAX(0,C{row_of['No Answer']}+C{row_of['Busy']}+C{row_of['Failed']}+C{system_errors_row})"
-                )
         elif in_core_block:
-            candidate = previous_day_values.get(spec["label"])
+            candidate = previous_day_values.get((current_group, spec["label"]))
             if candidate not in (None, ""):
                 yesterday_value = candidate
 
@@ -387,7 +482,7 @@ def _write_eod_summary_sheet(ws, eod_df: pd.DataFrame, previous_day_values: dict
 
         body_row += 1
 
-    ws.column_dimensions["A"].width = 72
+    ws.column_dimensions["A"].width = 82
     ws.column_dimensions["B"].width = 38
     ws.column_dimensions["C"].width = 18.5
     ws.column_dimensions["D"].width = 12

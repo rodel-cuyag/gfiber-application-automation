@@ -13,6 +13,7 @@ import json
 
 import pandas as pd
 from src import call_detail, data_loader
+from src.eod_report import COMPETITOR_METRIC_PREFIX
 
 
 # ── Sheet 1: Join Summary ─────────────────────────────────────────
@@ -84,7 +85,6 @@ _COMPLETENESS_FIELDS = [
     ("Contact Number", "MISSING"),
     ("Status", "MISSING (No Twilio data)"),
     ("Call Duration (sec)", "MISSING (No call_logs data)"),
-    ("Participated Call", "MISSING (No KPI data)"),
     ("Identity Confirmed", "MISSING (No KPI data)"),
     ("Consent & Recording Confirmed", "MISSING (No KPI data)"),
     ("Postpaid Status", "MISSING (No KPI data)"),
@@ -106,7 +106,6 @@ _COMPLETENESS_FIELDS = [
     ("Opt-Out Flag", "MISSING (No KPI data)"),
     ("Repeat Requested", "MISSING (No KPI data)"),
     ("Identity Re-asked (defect)", "MISSING (No KPI data)"),
-    ("Order Number", "MISSING (No KPI data)"),
     ("Call Date (PHT)", "MISSING"),
     ("Call Time (PHT)", "MISSING"),
     ("Call Completed", "MISSING (No KPI data)"),
@@ -190,19 +189,26 @@ def _build_calculation_audit(detail_log, eod_df, start_date, end_date):
     def count(column, value):
         return int((connected_calls[column] == value).sum())
 
-    def count_by_postpaid(column, value, postpaid_value):
-        return int((
-            (connected_calls[column] == value)
-            & (connected_calls["Postpaid Status"] == postpaid_value)
-        ).sum())
-
-    contacted = count("Participated Call", "Yes")
-    identity_confirmed = count("Identity Confirmed", "Yes")
+    # Mirrors the strict nesting in eod_report.build_eod_report: each funnel
+    # level is computed from the level above, not independently.
+    identity_calls = connected_calls[connected_calls["Identity Confirmed"] == "Yes"]
+    identity_confirmed = len(identity_calls)
     wrong_customer = count("Identity Confirmed", "No")
-    consented = count("Consent & Recording Confirmed", "Yes")
-    declined_recording = count("Consent & Recording Confirmed", "No")
-    postpaid = count("Postpaid Status", "postpaid")
-    non_postpaid = count("Postpaid Status", "non_postpaid")
+
+    consented_calls = identity_calls[identity_calls["Consent & Recording Confirmed"] == "Yes"]
+    consented = len(consented_calls)
+    declined_recording = int((identity_calls["Consent & Recording Confirmed"] == "No").sum())
+
+    postpaid_calls = consented_calls[consented_calls["Postpaid Status"] == "postpaid"]
+    non_postpaid_calls = consented_calls[consented_calls["Postpaid Status"] == "non_postpaid"]
+    postpaid = len(postpaid_calls)
+    non_postpaid = len(non_postpaid_calls)
+
+    def intent(segment_calls, value):
+        return int((segment_calls["Application Intent"] == value).sum())
+
+    funnel_residual = connected - identity_confirmed - wrong_customer
+
     proceed = count("Application Intent", "proceed")
     no_longer_interested = count("Application Intent", "no_longer_interested")
     already_completed = count("Application Intent", "already_completed")
@@ -210,13 +216,15 @@ def _build_calculation_audit(detail_log, eod_df, start_date, end_date):
     lead_outbound = count("Lead for Outbound Handling", "Yes")
     lead_email = count("Lead for Email Remarketing", "Yes")
     competitor_identified = count("Competitor Detected", "Yes")
+    postpaid_conversion = count("Final Disposition", "postpaid_wishes_to_proceed")
+    non_postpaid_conversion = count("Final Disposition", "non_postpaid_wishes_to_proceed")
 
-    proceed_postpaid = count_by_postpaid("Application Intent", "proceed", "postpaid")
-    proceed_non_postpaid = count_by_postpaid("Application Intent", "proceed", "non_postpaid")
-    nli_postpaid = count_by_postpaid("Application Intent", "no_longer_interested", "postpaid")
-    nli_non_postpaid = count_by_postpaid("Application Intent", "no_longer_interested", "non_postpaid")
-    completed_postpaid = count_by_postpaid("Application Intent", "already_completed", "postpaid")
-    completed_non_postpaid = count_by_postpaid("Application Intent", "already_completed", "non_postpaid")
+    proceed_postpaid = intent(postpaid_calls, "proceed")
+    proceed_non_postpaid = intent(non_postpaid_calls, "proceed")
+    nli_postpaid = intent(postpaid_calls, "no_longer_interested")
+    nli_non_postpaid = intent(non_postpaid_calls, "no_longer_interested")
+    completed_postpaid = intent(postpaid_calls, "already_completed")
+    completed_non_postpaid = intent(non_postpaid_calls, "already_completed")
 
     conn_rate_val = round((connected / dialed) * 100, 1) if dialed else 0.0
     conv_rate_val = round((proceed / connected) * 100, 1) if connected else 0.0
@@ -224,8 +232,10 @@ def _build_calculation_audit(detail_log, eod_df, start_date, end_date):
     def pct_of_connected(n):
         return round((n / connected) * 100, 1) if connected else 0.0
 
-    postpaid_pct = pct_of_connected(postpaid)
-    non_postpaid_pct = pct_of_connected(non_postpaid)
+    # The funnel pair is a share of its immediate parent (Consented),
+    # not of Connected — see eod_report.build_eod_report.
+    postpaid_pct = round((postpaid / consented) * 100, 1) if consented else 0.0
+    non_postpaid_pct = round((non_postpaid / consented) * 100, 1) if consented else 0.0
     endorsed_pct = pct_of_connected(endorsed)
     lead_outbound_pct = pct_of_connected(lead_outbound)
     lead_email_pct = pct_of_connected(lead_email)
@@ -290,138 +300,165 @@ def _build_calculation_audit(detail_log, eod_df, start_date, end_date):
     add_step(6, "Unmatched (blank Status)",
              "COUNTIF(Status = blank)", f"{unmatched} rows", unmatched,
              "Unmatched")  # not in report
-    add_step(7, "Contacted",
-             "COUNTIFS(Status='Connected', Participated Call='Yes')",
-             f"{connected} connected, {contacted} Yes", contacted,
-             "Contacted")
-    add_step(8, "Identity Confirmed",
+    add_step(7, "Identity Confirmed",
              "COUNTIFS(Status='Connected', Identity Confirmed='Yes')",
              f"{connected} connected, {identity_confirmed} Yes",
              identity_confirmed, "Identity Confirmed")
-    add_step(9, "Wrong Customer",
+    add_step(8, "Wrong Customer",
              "COUNTIFS(Status='Connected', Identity Confirmed='No')",
              f"{connected} connected, {wrong_customer} No",
              wrong_customer, "Wrong Customer")
-    add_step(10, "Consented to Continue and Recording",
-             "COUNTIFS(Status='Connected', Consent & Recording Confirmed='Yes')",
-             f"{connected} connected, {consented} Yes",
+    add_step(9, "Consented to Continue and Recording",
+             "COUNTIFS(Identity Confirmed='Yes', Consent & Recording Confirmed='Yes')",
+             f"{identity_confirmed} identity-confirmed, {consented} Yes",
              consented, "Consented to Continue and Recording")
-    add_step(11, "Declined Recording",
-             "COUNTIFS(Status='Connected', Consent & Recording Confirmed='No')",
-             f"{connected} connected, {declined_recording} No",
+    add_step(10, "Declined Recording",
+             "COUNTIFS(Identity Confirmed='Yes', Consent & Recording Confirmed='No')",
+             f"{identity_confirmed} identity-confirmed, {declined_recording} No",
              declined_recording, "Declined Recording")
-    add_step(12, "Postpaid Verified",
-             "COUNTIFS(Status='Connected', Postpaid Status='postpaid')",
-             f"{connected} connected, {postpaid} postpaid",
+    add_step(11, "Postpaid Verified",
+             "COUNTIFS(Consented, Postpaid Status='postpaid')",
+             f"{consented} consented, {postpaid} postpaid",
              postpaid, "Postpaid Verified")
-    add_step(13, "Non-Postpaid Verified",
-             "COUNTIFS(Status='Connected', Postpaid Status='non_postpaid')",
-             f"{connected} connected, {non_postpaid} non_postpaid",
+    add_step(12, "Non-Postpaid Verified",
+             "COUNTIFS(Consented, Postpaid Status='non_postpaid')",
+             f"{consented} consented, {non_postpaid} non_postpaid",
              non_postpaid, "Non-Postpaid Verified")
-    add_step(14, "Wishes to Proceed",
+    add_step(13, "Wishes to Proceed",
              "COUNTIFS(Status='Connected', Application Intent='proceed')",
              f"{connected} connected, {proceed} proceed",
              proceed, "Wishes to Proceed")
-    add_step(15, "No Longer Interested",
+    add_step(14, "No Longer Interested",
              "COUNTIFS(Status='Connected', Application Intent='no_longer_interested')",
              f"{connected} connected, {no_longer_interested} no_longer_interested",
              no_longer_interested, "No Longer Interested")
-    add_step(16, "Application Already Completed",
+    add_step(15, "Application Already Completed",
              "COUNTIFS(Status='Connected', Application Intent='already_completed')",
              f"{connected} connected, {already_completed} already_completed",
              already_completed, "Application Already Completed")
-    add_step(17, "Endorsed for Work Order",
+    add_step(16, "Endorsed for Work Order",
              "COUNTIFS(Status='Connected', Endorsed for Work Order='Yes')",
              f"{connected} connected, {endorsed} Yes",
              endorsed, "Endorsed for Work Order")
-    add_step(18, "Lead for Outbound Handling",
+    add_step(17, "Lead for Outbound Handling",
              "COUNTIFS(Status='Connected', Lead for Outbound Handling='Yes')",
              f"{connected} connected, {lead_outbound} Yes",
              lead_outbound, "Lead for Outbound Handling")
-    add_step(19, "Email Remarketing Tagged",
+    add_step(18, "Email Remarketing Tagged",
              "COUNTIFS(Status='Connected', Lead for Email Remarketing='Yes')",
              f"{connected} connected, {lead_email} Yes",
              lead_email, "Email Remarketing Tagged")
-    add_step(20, "Competitor Identified",
+    add_step(19, "Competitor Identified",
              "COUNTIFS(Status='Connected', Competitor Detected='Yes')",
              f"{connected} connected, {competitor_identified} Yes",
              competitor_identified, "Competitor Identified")
-    add_step(21, "Connection Rate",
+    add_step(20, "Connection Rate",
              "(Connected / Dialed) x 100",
              f"{connected} / {dialed} = {connected/dialed:.4f}" if dialed else "N/A",
              f"{conn_rate_val}%",
              "Connection Rate (Connected / Dialed)")
-    add_step(22, "Conversion Rate",
+    add_step(21, "Conversion Rate",
              "(Proceed / Connected) x 100",
              f"{proceed} / {connected} = {proceed/connected:.4f}" if connected else "N/A",
              f"{conv_rate_val}%",
              "Conversion Rate (Proceed / Connected)")
-    add_step(23, "Total Call Duration (minutes)",
+    add_step(22, "Total Call Duration (minutes)",
              "SUM(Call Duration (sec)) / 60",
              f"{total_sec} sec / 60", total_min,
              "Total Call Duration (minutes)")
-    add_step(24, "Avg. Call Duration - Connected",
+    add_step(23, "Avg. Call Duration - Connected",
              "AVERAGE(Call Duration (sec) WHERE Status='Connected')",
              f"{len(dur)} rows, sum={total_sec} sec", avg_dur,
              "Avg. Call Duration - Connected (seconds)")
-    add_step(25, "System Errors",
+    add_step(24, "System Errors",
              "MAX(0, Calls Dialed - Target - Calls Dialed - Actual)",
              f"{target_val} - {dialed} = {target_val - dialed}", system_errors,
              "System Errors")
-    add_step(26, "Retries Queued for Tomorrow",
+    add_step(25, "Retries Queued for Tomorrow",
              "Failed + No Answer + Busy + System Errors",
              f"{failed} + {no_answer} + {busy} + {system_errors} = {retries}",
              retries, "Retries Queued for Tomorrow")
 
-    # Intent x segment cross-tab. These won't sum back to their parent
-    # total when some connected calls carry a blank Postpaid Status.
-    add_step(27, "Wishes to Proceed - Postpaid",
-             "COUNTIFS(Status='Connected', Application Intent='proceed', Postpaid Status='postpaid')",
-             f"{proceed} proceed, {proceed_postpaid} postpaid",
+    # Intent within each customer segment, nested under the consented
+    # postpaid / non-postpaid populations.
+    add_step(26, "Wishes to Proceed - Postpaid",
+             "COUNTIFS(Consented, Postpaid Status='postpaid', Application Intent='proceed')",
+             f"{postpaid} postpaid, {proceed_postpaid} proceed",
              proceed_postpaid, "Wishes to Proceed - Postpaid")
-    add_step(28, "Wishes to Proceed - Non-Postpaid",
-             "COUNTIFS(Status='Connected', Application Intent='proceed', Postpaid Status='non_postpaid')",
-             f"{proceed} proceed, {proceed_non_postpaid} non_postpaid",
+    add_step(27, "Wishes to Proceed - Non-Postpaid",
+             "COUNTIFS(Consented, Postpaid Status='non_postpaid', Application Intent='proceed')",
+             f"{non_postpaid} non_postpaid, {proceed_non_postpaid} proceed",
              proceed_non_postpaid, "Wishes to Proceed - Non-Postpaid")
-    add_step(29, "No Longer Interested - Postpaid",
-             "COUNTIFS(Status='Connected', Application Intent='no_longer_interested', Postpaid Status='postpaid')",
-             f"{no_longer_interested} no_longer_interested, {nli_postpaid} postpaid",
+    add_step(28, "No Longer Interested - Postpaid",
+             "COUNTIFS(Consented, Postpaid Status='postpaid', Application Intent='no_longer_interested')",
+             f"{postpaid} postpaid, {nli_postpaid} no_longer_interested",
              nli_postpaid, "No Longer Interested - Postpaid")
-    add_step(30, "No Longer Interested - Non-Postpaid",
-             "COUNTIFS(Status='Connected', Application Intent='no_longer_interested', Postpaid Status='non_postpaid')",
-             f"{no_longer_interested} no_longer_interested, {nli_non_postpaid} non_postpaid",
+    add_step(29, "No Longer Interested - Non-Postpaid",
+             "COUNTIFS(Consented, Postpaid Status='non_postpaid', Application Intent='no_longer_interested')",
+             f"{non_postpaid} non_postpaid, {nli_non_postpaid} no_longer_interested",
              nli_non_postpaid, "No Longer Interested - Non-Postpaid")
-    add_step(31, "Application Already Completed - Postpaid",
-             "COUNTIFS(Status='Connected', Application Intent='already_completed', Postpaid Status='postpaid')",
-             f"{already_completed} already_completed, {completed_postpaid} postpaid",
+    add_step(30, "Application Already Completed - Postpaid",
+             "COUNTIFS(Consented, Postpaid Status='postpaid', Application Intent='already_completed')",
+             f"{postpaid} postpaid, {completed_postpaid} already_completed",
              completed_postpaid, "Application Already Completed - Postpaid")
-    add_step(32, "Application Already Completed - Non-Postpaid",
-             "COUNTIFS(Status='Connected', Application Intent='already_completed', Postpaid Status='non_postpaid')",
-             f"{already_completed} already_completed, {completed_non_postpaid} non_postpaid",
+    add_step(31, "Application Already Completed - Non-Postpaid",
+             "COUNTIFS(Consented, Postpaid Status='non_postpaid', Application Intent='already_completed')",
+             f"{non_postpaid} non_postpaid, {completed_non_postpaid} already_completed",
              completed_non_postpaid, "Application Already Completed - Non-Postpaid")
 
-    # Share-of-connected percentages. Computed values carry the "%" suffix
-    # so they compare equal to the string the EOD Report writes.
-    add_step(33, "Postpaid Customers %",
-             "(Postpaid Verified / Connected) x 100",
-             f"{postpaid} / {connected}" if connected else "N/A",
-             f"{postpaid_pct}%", "Postpaid Customers % (of Connected)")
-    add_step(34, "Non-Postpaid Customers %",
-             "(Non-Postpaid Verified / Connected) x 100",
-             f"{non_postpaid} / {connected}" if connected else "N/A",
-             f"{non_postpaid_pct}%", "Non-Postpaid Customers % (of Connected)")
-    add_step(35, "Endorsed for Work Order %",
+    # Percentages. Computed values carry the "%" suffix so they compare
+    # equal to the string the EOD Report writes.
+    add_step(32, "Postpaid Customers %",
+             "(Postpaid Verified / Consented) x 100",
+             f"{postpaid} / {consented}" if consented else "N/A",
+             f"{postpaid_pct}%", "Postpaid Customers % (of Consented)")
+    add_step(33, "Non-Postpaid Customers %",
+             "(Non-Postpaid Verified / Consented) x 100",
+             f"{non_postpaid} / {consented}" if consented else "N/A",
+             f"{non_postpaid_pct}%", "Non-Postpaid Customers % (of Consented)")
+    add_step(34, "Endorsed for Work Order %",
              "(Endorsed for Work Order / Connected) x 100",
              f"{endorsed} / {connected}" if connected else "N/A",
              f"{endorsed_pct}%", "Endorsed for Work Order % (of Connected)")
-    add_step(36, "Lead for Outbound Handling %",
+    add_step(35, "Lead for Outbound Handling %",
              "(Lead for Outbound Handling / Connected) x 100",
              f"{lead_outbound} / {connected}" if connected else "N/A",
              f"{lead_outbound_pct}%", "Lead for Outbound Handling % (of Connected)")
-    add_step(37, "Email Remarketing %",
+    add_step(36, "Email Remarketing %",
              "(Email Remarketing Tagged / Connected) x 100",
              f"{lead_email} / {connected}" if connected else "N/A",
              f"{lead_email_pct}%", "Email Remarketing % (of Connected)")
+
+    # Diagnostic, not a reported metric: the FUNNEL section's top level
+    # deliberately shows no residual row, so this is where the gap between
+    # Calls Connected and the identity split is accounted for. These are
+    # connected calls that never reached the identity step — no meaningful
+    # engagement, or no KPI record emitted for the conversation at all.
+    add_step(37, "Funnel residual (connected, not classified)",
+             "Calls Connected - (Identity Confirmed + Wrong Customer)",
+             f"{connected} - ({identity_confirmed} + {wrong_customer}) = {funnel_residual}",
+             funnel_residual, "Funnel Residual")  # not in report by design
+
+    add_step(38, "Postpaid Conversion Rate",
+             "(final_disposition='postpaid_wishes_to_proceed' / Connected) x 100",
+             f"{postpaid_conversion} / {connected}" if connected else "N/A",
+             f"{pct_of_connected(postpaid_conversion)}%", "Postpaid Conversion Rate")
+    add_step(39, "Non-Postpaid Conversion Rate",
+             "(final_disposition='non_postpaid_wishes_to_proceed' / Connected) x 100",
+             f"{non_postpaid_conversion} / {connected}" if connected else "N/A",
+             f"{pct_of_connected(non_postpaid_conversion)}%", "Non-Postpaid Conversion Rate")
+
+    # The competitor breakdown is built from a data-driven provider list
+    # with "Others" as a computed residual, so the one thing worth asserting
+    # is that the rows still add up to the parent they sit under.
+    competitor_total = int(sum(
+        v for k, v in eod_lookup.items()
+        if isinstance(k, str) and k.startswith(COMPETITOR_METRIC_PREFIX)
+    ))
+    add_step(40, "Competitor breakdown reconciliation",
+             "SUM(competitor breakdown rows) = Competitor Identified",
+             f"{competitor_total} across breakdown rows",
+             competitor_total, "Competitor Identified")
 
     return pd.DataFrame(rows)
 

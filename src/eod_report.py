@@ -13,6 +13,86 @@ cost) are left blank with a comment, rather than guessed.
 
 import pandas as pd
 
+# Competitor breakdown metric keys are built at runtime (one per provider
+# actually seen), so they can't live in a static list. excel_writer finds
+# them by this prefix; the emission order below is the sheet order.
+COMPETITOR_METRIC_PREFIX = "Competitor - "
+
+# Display order and labels for the providers the agent config enumerates
+# for competitor_name. 'none' is excluded (it means the customer did not
+# switch at all) and 'others' is emitted near the end as the reconciling
+# residual rather than listed here.
+CANONICAL_COMPETITORS = [
+    ("pldt", "PLDT"),
+    ("converge", "Converge"),
+    ("starlink", "Starlink"),
+    ("sky", "Sky"),
+    ("dito", "DITO"),
+    ("smart", "Smart"),
+]
+
+# Closes the breakdown, below even the "Others" residual, rather than
+# sitting among the canonical providers above: 'undisclosed' names no
+# provider, so it doesn't belong in the list of real competitors. Still a
+# named row of its own (unlike the values in _NON_PROVIDER_VALUES) — the
+# count is meaningful, and "Others" is computed net of it.
+TRAILING_COMPETITORS = [
+    ("undisclosed", "Undisclosed"),
+]
+
+# Values that never earn a named row of their own: 'none' means the field
+# didn't apply, and 'others' is the residual bucket itself.
+_NON_PROVIDER_VALUES = {"none", "others", ""}
+
+
+def _build_competitor_rows(competitor_calls) -> list:
+    """
+    One (metric key, count) pair per competitor, in display order:
+    the canonical providers first (always present, zeros included, so the
+    row set stays stable day to day for the Yesterday/Δ lookup), then a
+    row for any write-in provider found in the data, then "Others", then
+    "Undisclosed".
+
+    The agent config tells the model to return an unlisted provider's name
+    verbatim rather than "others", so the value set is open-ended — the
+    write-in rows are what stop those calls from vanishing. "Others" is
+    computed as the residual so the breakdown always reconciles to
+    Competitor Identified, absorbing the literal 'others' value along with
+    any detected call whose competitor_name came back blank or 'none'.
+    """
+    names = (
+        competitor_calls["Competitor Name"]
+        .dropna()
+        .astype(str)
+        .str.strip()
+        .str.lower()
+    )
+    counts = names.value_counts()
+
+    def named_rows(spec):
+        return [(label, int(counts.get(key, 0))) for key, label in spec]
+
+    known = (
+        {key for key, _ in CANONICAL_COMPETITORS}
+        | {key for key, _ in TRAILING_COMPETITORS}
+        | _NON_PROVIDER_VALUES
+    )
+    extras = [(k, int(v)) for k, v in counts.items() if k not in known]
+    extras.sort(key=lambda kv: (-kv[1], kv[0]))
+
+    leading = named_rows(CANONICAL_COMPETITORS) + [(k.title(), v) for k, v in extras]
+    trailing = named_rows(TRAILING_COMPETITORS)
+
+    # Net of the trailing rows as well as the leading ones, even though it
+    # prints above them — otherwise Others would double-count those calls
+    # and the breakdown would overshoot Competitor Identified.
+    claimed = sum(v for _, v in leading) + sum(v for _, v in trailing)
+    others = ("Others", len(competitor_calls) - claimed)
+
+    rows = leading + [others] + trailing
+
+    return [(f"{COMPETITOR_METRIC_PREFIX}{label}", value) for label, value in rows]
+
 
 def build_eod_report(call_detail_log: pd.DataFrame, start_date, end_date, agent_id: int) -> pd.DataFrame:
     """
@@ -51,37 +131,44 @@ def build_eod_report(call_detail_log: pd.DataFrame, start_date, end_date, agent_
     def count(column, value):
         return (connected_calls[column] == value).sum()
 
-    def count_by_postpaid(column, value, postpaid_value):
-        return (
-            (connected_calls[column] == value)
-            & (connected_calls["Postpaid Status"] == postpaid_value)
-        ).sum()
+    # The funnel is strictly nested: each level is a subset of the one above,
+    # so the sheet's "X Breakdown" banners describe a real decomposition
+    # rather than independent counts that happen to sit near each other.
+    #
+    # Note the top level doesn't fully reconcile: Identity Confirmed +
+    # Wrong Customer is less than Calls Connected, because a connected call
+    # with no meaningful engagement (or no KPI record at all) never reaches
+    # the identity step. That residual is deliberately not shown as its own
+    # row — see the Validation Report's funnel-residual audit step.
+    identity_calls = connected_calls[connected_calls["Identity Confirmed"] == "Yes"]
+    identity_confirmed = len(identity_calls)
+    wrong_customer = (connected_calls["Identity Confirmed"] == "No").sum()
 
-    contacted = count("Participated Call", "Yes")
+    consented_calls = identity_calls[identity_calls["Consent & Recording Confirmed"] == "Yes"]
+    consented = len(consented_calls)
+    declined_recording = (identity_calls["Consent & Recording Confirmed"] == "No").sum()
 
-    identity_confirmed = count("Identity Confirmed", "Yes")
-    wrong_customer = count("Identity Confirmed", "No")
-    consented = count("Consent & Recording Confirmed", "Yes")
-    declined_recording = count("Consent & Recording Confirmed", "No")
-    postpaid = count("Postpaid Status", "postpaid")
-    non_postpaid = count("Postpaid Status", "non_postpaid")
+    postpaid_calls = consented_calls[consented_calls["Postpaid Status"] == "postpaid"]
+    non_postpaid_calls = consented_calls[consented_calls["Postpaid Status"] == "non_postpaid"]
+    postpaid = len(postpaid_calls)
+    non_postpaid = len(non_postpaid_calls)
 
     wishes_to_proceed = count("Application Intent", "proceed")
     no_longer_interested = count("Application Intent", "no_longer_interested")
     already_completed = count("Application Intent", "already_completed")
 
-    # Intent broken down by customer segment — an Application Intent x
-    # Postpaid Status cross-tab, deliberately independent of the
+    # Intent within each customer segment. Deliberately independent of the
     # final_disposition-derived Postpaid/Non-Postpaid Conversion rows below:
     # the two pairs answer different questions and may legitimately differ.
-    # These sub-counts won't always sum back to their total, since a call
-    # with a blank Postpaid Status falls into neither segment.
-    wishes_to_proceed_postpaid = count_by_postpaid("Application Intent", "proceed", "postpaid")
-    wishes_to_proceed_non_postpaid = count_by_postpaid("Application Intent", "proceed", "non_postpaid")
-    no_longer_interested_postpaid = count_by_postpaid("Application Intent", "no_longer_interested", "postpaid")
-    no_longer_interested_non_postpaid = count_by_postpaid("Application Intent", "no_longer_interested", "non_postpaid")
-    already_completed_postpaid = count_by_postpaid("Application Intent", "already_completed", "postpaid")
-    already_completed_non_postpaid = count_by_postpaid("Application Intent", "already_completed", "non_postpaid")
+    def intent(segment_calls, value):
+        return (segment_calls["Application Intent"] == value).sum()
+
+    wishes_to_proceed_postpaid = intent(postpaid_calls, "proceed")
+    wishes_to_proceed_non_postpaid = intent(non_postpaid_calls, "proceed")
+    no_longer_interested_postpaid = intent(postpaid_calls, "no_longer_interested")
+    no_longer_interested_non_postpaid = intent(non_postpaid_calls, "no_longer_interested")
+    already_completed_postpaid = intent(postpaid_calls, "already_completed")
+    already_completed_non_postpaid = intent(non_postpaid_calls, "already_completed")
 
     endorsed = count("Endorsed for Work Order", "Yes")
     lead_outbound = count("Lead for Outbound Handling", "Yes")
@@ -93,7 +180,9 @@ def build_eod_report(call_detail_log: pd.DataFrame, start_date, end_date, agent_
 
     non_completion_price = count("Non-Completion Reason", "price")
     non_completion_competitor = count("Non-Completion Reason", "competitor")
-    competitor_identified = count("Competitor Detected", "Yes")
+    competitor_calls = connected_calls[connected_calls["Competitor Detected"] == "Yes"]
+    competitor_identified = len(competitor_calls)
+    competitor_rows = _build_competitor_rows(competitor_calls)
 
     repeat_requested = count("Repeat Requested", "Yes")
     identity_reasked = count("Identity Re-asked (defect)", "Yes")
@@ -102,17 +191,30 @@ def build_eod_report(call_detail_log: pd.DataFrame, start_date, end_date, agent_
     connection_rate = round((connected / dialed) * 100, 1) if dialed else 0.0
     conversion_rate = round((wishes_to_proceed / connected) * 100, 1) if connected else 0.0
 
-    # Share-of-connected percentages. Connected is the right denominator for
-    # all of these: every KPI-derived count above is already connected-only,
-    # so the base and the numerator come from the same population.
-    def pct_of_connected(n):
-        return round((n / connected) * 100, 1) if connected else 0.0
+    def pct_of(n, denominator):
+        return round((n / denominator) * 100, 1) if denominator else 0.0
 
-    postpaid_pct = pct_of_connected(postpaid)
-    non_postpaid_pct = pct_of_connected(non_postpaid)
+    # Share-of-connected percentages for the outcome metrics: every
+    # KPI-derived count is already connected-only, so the base and the
+    # numerator come from the same population.
+    def pct_of_connected(n):
+        return pct_of(n, connected)
+
+    # The funnel pair is a share of its immediate parent instead, so the
+    # two sum to 100% within the "Consented" breakdown they sit under.
+    postpaid_pct = pct_of(postpaid, consented)
+    non_postpaid_pct = pct_of(non_postpaid, consented)
     endorsed_pct = pct_of_connected(endorsed)
     lead_outbound_pct = pct_of_connected(lead_outbound)
     lead_email_pct = pct_of_connected(lead_email)
+
+    # Over Connected, the same base as the headline conversion rate, so the
+    # two decompose it. That decomposition holds only while final_disposition
+    # and application_intent agree — they're separate agent fields, so if the
+    # two segment rates stop summing to the headline, that's a data-quality
+    # signal about the agent's output, not a fault in the sheet.
+    postpaid_conversion_rate = pct_of_connected(postpaid_conversion)
+    non_postpaid_conversion_rate = pct_of_connected(non_postpaid_conversion)
 
     # Calculate durations
     durations = range_log["Call Duration (sec)"].dropna()
@@ -140,7 +242,6 @@ def build_eod_report(call_detail_log: pd.DataFrame, start_date, end_date, agent_
         ("", ""),  # Blank row
 
         # Participation
-        ("Contacted", contacted),
         ("Total Completed Calls", completed),
         ("", ""),  # Blank row
 
@@ -155,21 +256,25 @@ def build_eod_report(call_detail_log: pd.DataFrame, start_date, end_date, agent_
         ("Consented to Continue and Recording", consented),
         ("Declined Recording", declined_recording),
         ("Postpaid Verified", postpaid),
-        ("Postpaid Customers % (of Connected)", f"{postpaid_pct}%"),
+        ("Postpaid Customers % (of Consented)", f"{postpaid_pct}%"),
         ("Non-Postpaid Verified", non_postpaid),
-        ("Non-Postpaid Customers % (of Connected)", f"{non_postpaid_pct}%"),
+        ("Non-Postpaid Customers % (of Consented)", f"{non_postpaid_pct}%"),
         ("", ""),  # Blank row
 
-        # Intent Outcomes
-        ("Wishes to Proceed", wishes_to_proceed),
+        # Intent within each customer segment (shown under the FUNNEL
+        # section's Postpaid / Non-Postpaid breakdown banners)
         ("Wishes to Proceed - Postpaid", wishes_to_proceed_postpaid),
-        ("Wishes to Proceed - Non-Postpaid", wishes_to_proceed_non_postpaid),
-        ("No Longer Interested", no_longer_interested),
         ("No Longer Interested - Postpaid", no_longer_interested_postpaid),
-        ("No Longer Interested - Non-Postpaid", no_longer_interested_non_postpaid),
-        ("Application Already Completed", already_completed),
         ("Application Already Completed - Postpaid", already_completed_postpaid),
+        ("Wishes to Proceed - Non-Postpaid", wishes_to_proceed_non_postpaid),
+        ("No Longer Interested - Non-Postpaid", no_longer_interested_non_postpaid),
         ("Application Already Completed - Non-Postpaid", already_completed_non_postpaid),
+        ("", ""),  # Blank row
+
+        # Intent Outcomes (combined)
+        ("Wishes to Proceed", wishes_to_proceed),
+        ("No Longer Interested", no_longer_interested),
+        ("Application Already Completed", already_completed),
         ("", ""),  # Blank row
 
         # Endorsement & Leads
@@ -181,15 +286,19 @@ def build_eod_report(call_detail_log: pd.DataFrame, start_date, end_date, agent_
         ("Email Remarketing % (of Connected)", f"{lead_email_pct}%"),
         ("", ""),  # Blank row
 
-        # Final Dispositions
-        ("Postpaid Conversion", postpaid_conversion),
-        ("Non-Postpaid Conversion", non_postpaid_conversion),
+        # Final Dispositions. No longer rendered on the EOD Report sheet
+        # (see excel_writer.DASHBOARD_ROWS) — retained here because the
+        # Validation Report's Calculation Audit still checks them against
+        # its own independent recomputation.
         ("Not Available / No Consent", not_available_no_consent),
         ("", ""),  # Blank row
 
         # Conversion Metrics
         ("Connection Rate (Connected / Dialed)", f"{connection_rate}%"),
         ("Conversion Rate (Proceed / Connected)", f"{conversion_rate}%"),
+        ("Postpaid Conversion Rate", f"{postpaid_conversion_rate}%"),
+        ("Non-Postpaid Conversion Rate", f"{non_postpaid_conversion_rate}%"),
+        # Validation-Report-only, same as Not Available / No Consent above.
         ("Retries Queued for Tomorrow", retries_queued),
         ("", ""),  # Blank row
 
@@ -197,6 +306,10 @@ def build_eod_report(call_detail_log: pd.DataFrame, start_date, end_date, agent_
         ("Non-Completion - Price", non_completion_price),
         ("Non-Completion - Competitor", non_completion_competitor),
         ("Competitor Identified", competitor_identified),
+        ("", ""),  # Blank row
+
+        # Competitor breakdown — variable length, one row per provider
+        *competitor_rows,
         ("", ""),  # Blank row
 
         # Quality
