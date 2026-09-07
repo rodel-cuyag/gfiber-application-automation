@@ -171,17 +171,51 @@ same date-or-range.
 **Report structure:** the workbook has 2 sheets. **EOD Report** is a
 dashboard-style summary — one row per metric for the whole period (not one
 row per day) — with a Today/Yesterday/Δ comparison table, grouped into
-sections: call volume, **FUNNEL** (identity → consent → postpaid, with
-postpaid / non-postpaid share-of-connected percentages),
-**OUTCOMES** (intent, endorsement, leads, final dispositions),
+sections: call volume, **FUNNEL**, **OUTCOMES**,
 **NON-COMPLETION & COMPETITOR**, **QUALITY**, then the manually-filled
-FINOPS / ISSUES & CHANGES / TOMORROW'S PLAN blocks.
+FINOPS / ISSUES & CHANGES / TOMORROW'S PLAN blocks. Section dividers are
+navy bands spanning the full width of the table.
 
-In **OUTCOMES**, each of the three intent results (Wishes to Proceed, No
-Longer Interested, Application Already Completed) is reported as a combined
-total followed by a `- Postpaid` / `- Non-Postpaid` breakdown, and Endorsed
-for Work Order, Lead for Outbound Handling, and Email Remarketing Tagged each
+**FUNNEL** is a nested breakdown rather than a flat list. Each level opens
+with a blue banner naming its parent and that parent's total — e.g.
+`Calls Connected Breakdown — 57` — with the children indented beneath it:
+
+```
+FUNNEL
+  Calls Connected Breakdown — 57
+      Identity Confirmed / Wrong Customer
+  Identity Confirmed Breakdown — 45
+      Consented to Continue and Recording / Declined Recording
+  Consented to Continue and Recording Breakdown — 41
+      Postpaid (+ % of Consented) / Non-Postpaid (+ % of Consented)
+  Postpaid Breakdown — 24
+      Wishes to Proceed / No Longer Interested / Application Already Completed
+  Non-Postpaid Breakdown — 17
+      Wishes to Proceed / No Longer Interested / Application Already Completed
+```
+
+Every banner total also appears as an ordinary data row elsewhere on the
+sheet, so nothing loses its Yesterday/Δ treatment by sitting in a banner.
+
+**OUTCOMES** uses the same banner styling as pure grouping bands (Intent
+Outcomes, Conversion Rates, Endorsement & Leads) with no parent total. It carries the three intent results as combined counts only —
+the postpaid/non-postpaid split of those results lives in FUNNEL and is not
+repeated here. **Conversion Rates** groups the three comparable percentages:
+the headline `Conversion Rate (Proceed / Connected)` and the per-segment
+`Postpaid Conversion Rate` / `Non-Postpaid Conversion Rate`. Endorsed for
+Work Order, Lead for Outbound Handling, and Email Remarketing Tagged each
 carry a `% (of Connected)` row beneath the count.
+
+**NON-COMPLETION & COMPETITOR** ends with a `Competitor Identified
+Breakdown — N` banner splitting that total by named provider — the banner is
+the only place that total appears, so there's no separate `Competitor
+Identified` row above it. The rows are part fixed, part data-driven: the
+providers the agent config enumerates (PLDT, Converge, Starlink, Sky, DITO,
+Smart) always render, zeros included, so the row set stays stable for the
+Yesterday/Δ lookup; any write-in provider found in the data gets its own row
+after them; then the `Others` residual; and `Undisclosed` closes the block,
+since it names no provider and so doesn't belong among the real competitors.
+See the counting rule below for why the write-in rows exist.
 
 For single-day runs, **Yesterday** is best-effort filled in by reading back
 the previous day's already-generated EOD workbook (see `src/prior_day.py`) —
@@ -196,7 +230,15 @@ since the pipeline doesn't track which day of the campaign a run
 corresponds to. Cells that need a human to fill them in day-to-day (FinOps,
 issues/changes) are highlighted yellow.
 
-**Call Detail Log** lists every call in the period across 30 columns — one
+The prior-day lookup keys each row by *(enclosing band, label)* rather than
+by label alone, because display labels repeat — "Wishes to Proceed" appears
+under both the Postpaid and Non-Postpaid breakdown banners as well as in
+OUTCOMES, and keying on the label alone would give all three the same
+Yesterday value. One consequence when upgrading: a prior report generated
+before the FUNNEL restructure has no bands to key against, so FUNNEL and
+OUTCOMES rows show a blank Yesterday for exactly one run, then self-heal.
+
+**Call Detail Log** lists every call in the period across 28 columns — one
 per field the agent emits in `outputJson`, plus the Twilio status, duration,
 and a `Call Date (PHT)` column so you can still see which day each row
 belongs to.
@@ -206,15 +248,52 @@ Failed) come from every row in the period. Every KPI-derived count
 (identity, consent, postpaid, intent, endorsement, competitor, quality) is
 counted from **connected calls only**, so the funnel and the rates built on
 it stay honest — a no-answer call can't have confirmed an identity or stated
-an intent. Every percentage metric on the sheet uses **Calls Connected** as
-its denominator, the one exception being Connection Rate, which is over
-Calls Dialled. The `- Postpaid` / `- Non-Postpaid` sub-rows are an
-`Application Intent × Postpaid Status` cross-tab and won't always sum back to
-their parent total — a connected call whose postpaid status the agent never
-established belongs to neither segment. They're also independent of the
-`final_disposition`-derived **Postpaid Conversion** / **Non-Postpaid
-Conversion** rows, which answer a different question and may legitimately
-differ.
+an intent.
+
+Within FUNNEL, each level is computed as a strict subset of the level above
+it, so a child can never exceed its parent: Consented is counted among
+identity-confirmed calls, the postpaid split among consented calls, and the
+intent results within each segment. **Percentage denominators** follow the
+same principle — `Postpaid % (of Consented)` and `Non-Postpaid % (of
+Consented)` are shares of their immediate parent and therefore sum to 100%,
+while the three OUTCOMES percentages (Endorsed for Work Order, Lead for
+Outbound Handling, Email Remarketing) are shares of **Calls Connected**, and
+Connection Rate is over Calls Dialled - Actual (hence its label,
+`Connection Rate (Connected / Actual Dialled)`).
+
+**One caveat on the top funnel level:** `Identity Confirmed + Wrong Customer`
+will generally be *less than* `Calls Connected`. A connected call that had no
+meaningful engagement (the line was answered but no real conversation
+happened — voicemail, dead air) or that produced no KPI record at all never
+reaches the identity step, so it belongs to neither child. That residual is
+deliberately not shown as its own row; the Validation Report's **Funnel
+residual** audit step reports the exact count, and the **Field Completeness**
+sheet covers the missing-KPI portion.
+
+**Conversion Rate (Proceed / Connected)** and the two segment conversion
+rates all use **Calls Connected** as their denominator, so the segment rates
+decompose the headline exactly — 26.3% + 19.3% = 45.6% on the sample data.
+That decomposition holds only while the agent's `final_disposition` and
+`application_intent` fields agree: the headline rate counts
+`application_intent = 'proceed'`, while the segment rates count
+`final_disposition = 'postpaid_wishes_to_proceed'` /
+`'non_postpaid_wishes_to_proceed'`. If the two segment rates stop summing to
+the headline, that's a signal the agent is emitting inconsistent fields — not
+a fault in the sheet. For the same reason the segment rates are independent
+of the FUNNEL section's intent rows, which are `application_intent`-derived
+and may legitimately differ.
+
+**Competitor breakdown:** the rows nest under `Competitor Detected = Yes`, so
+calls where `competitor_name` is `none` or blank are outside the parent
+population entirely. Beyond the enumerated providers, the config instructs
+the agent that *"if customer mentioned the name of the provider, use the name
+as the value rather than using 'others'"* — the value set is therefore
+open-ended, which is why unlisted names get their own generated row instead
+of being folded away. **Others** is computed as a residual rather than a
+count, so the breakdown always reconciles to Competitor Identified; it
+absorbs the literal `others` value along with any detected call whose
+`competitor_name` came back blank. The Validation Report's step 40 asserts
+that reconciliation.
 
 **Also generated:** a companion `GFiber_Application_EOD_Validation_{agent_id}_{date}.xlsx`
 workbook is written alongside the EOD Report on every run, in the same
@@ -365,13 +444,19 @@ with `"; "`.
 - **The agent's "Provider Availed" KPI is bound to a field it never emits.**
   In the agent config, that KPI's `outputFieldName` is `provider_availed`,
   but no such key exists among the 24 `conversation_metrics` — the real
-  field carrying the provider is `competitor_name`. The EOD Report no longer
-  surfaces an aggregate row for it (the old **Provider Availed - PLDT** and
+  field carrying the provider is `competitor_name`. The report's
+  **Competitor Identified Breakdown** reads `competitor_name` directly, so
+  the numbers here are correct; the agent's own KPI dashboard is the thing
+  reading nothing. The binding bug is unfixed on the agent side and still
+  worth raising with Globe. (The old **Provider Availed - PLDT** and
   **Reason for Switch - Price** rows were single-value slices hardcoded to
-  one competitor and one reason, so they were dropped), but the underlying
-  `competitor_name` and `reason_for_switch` values are still visible
-  per-call in the **Call Detail Log**. The binding bug itself is unfixed on
-  the agent side and still worth raising with Globe.
+  one competitor and one reason; the breakdown replaced the first, and
+  `reason_for_switch` remains visible per-call in the **Call Detail Log**.)
+- **Unfamiliar competitor names in the breakdown are expected.** The agent is
+  told to write in a provider's name verbatim when it isn't one of the six
+  it knows, so rows like "Royal Cable" can appear on any given day. That is
+  the agent working as configured, not a data error — but a name that looks
+  like a misheard transcription is worth checking against the call.
 - **LLM Inference Cost, P0/P1 issue counts, and several other EOD Report
   fields** are left blank — no source data currently supports them.
   This is separate from `N/A`, which only appears in the Call
