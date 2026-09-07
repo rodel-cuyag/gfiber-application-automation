@@ -1,6 +1,4 @@
 """
-eod_report.py
---------------
 Builds the "EOD Report" sheet: aggregate KPIs for a calling-day RANGE
 (start_date..end_date, inclusive — a single day is just a range of 1),
 covering the full funnel the GFiber abandoned-application agent measures:
@@ -223,14 +221,14 @@ def build_eod_report(call_detail_log: pd.DataFrame, start_date, end_date, agent_
     total_duration_sec = durations.sum() if not durations.empty else 0
     total_duration_min = round(total_duration_sec / 60, 1) if total_duration_sec else None
 
-    # Calculate retries queued (Failed, No Answer, Busy = need retry)
+    # Calculate retries queued (Failed, No Answer, Busy)
     retries_queued = failed + no_answer + busy
 
     metrics = [
         ("Report Period", period_label),
         ("Days in Range", days_in_range),
         ("Agent ID", agent_id),
-        ("", ""),  # Blank row for readability
+        ("", ""),
 
         # Call Volume Metrics
         ("Calls Dialed - Target", ""),
@@ -239,16 +237,16 @@ def build_eod_report(call_detail_log: pd.DataFrame, start_date, end_date, agent_
         ("No Answer", no_answer),
         ("Busy", busy),
         ("Failed", failed),
-        ("", ""),  # Blank row
+        ("", ""),
 
         # Participation
         ("Total Completed Calls", completed),
-        ("", ""),  # Blank row
+        ("", ""),
 
         # Duration Metrics
         ("Total Call Duration (minutes)", total_duration_min),
         ("Avg. Call Duration - Connected (seconds)", avg_duration),
-        ("", ""),  # Blank row
+        ("", ""),
 
         # Funnel
         ("Identity Confirmed", identity_confirmed),
@@ -259,7 +257,7 @@ def build_eod_report(call_detail_log: pd.DataFrame, start_date, end_date, agent_
         ("Postpaid Customers % (of Consented)", f"{postpaid_pct}%"),
         ("Non-Postpaid Verified", non_postpaid),
         ("Non-Postpaid Customers % (of Consented)", f"{non_postpaid_pct}%"),
-        ("", ""),  # Blank row
+        ("", ""),
 
         # Intent within each customer segment (shown under the FUNNEL
         # section's Postpaid / Non-Postpaid breakdown banners)
@@ -269,13 +267,13 @@ def build_eod_report(call_detail_log: pd.DataFrame, start_date, end_date, agent_
         ("Wishes to Proceed - Non-Postpaid", wishes_to_proceed_non_postpaid),
         ("No Longer Interested - Non-Postpaid", no_longer_interested_non_postpaid),
         ("Application Already Completed - Non-Postpaid", already_completed_non_postpaid),
-        ("", ""),  # Blank row
+        ("", ""),
 
         # Intent Outcomes (combined)
         ("Wishes to Proceed", wishes_to_proceed),
         ("No Longer Interested", no_longer_interested),
         ("Application Already Completed", already_completed),
-        ("", ""),  # Blank row
+        ("", ""),
 
         # Endorsement & Leads
         ("Endorsed for Work Order", endorsed),
@@ -284,14 +282,14 @@ def build_eod_report(call_detail_log: pd.DataFrame, start_date, end_date, agent_
         ("Lead for Outbound Handling % (of Connected)", f"{lead_outbound_pct}%"),
         ("Email Remarketing Tagged", lead_email),
         ("Email Remarketing % (of Connected)", f"{lead_email_pct}%"),
-        ("", ""),  # Blank row
+        ("", ""),
 
         # Final Dispositions. No longer rendered on the EOD Report sheet
         # (see excel_writer.DASHBOARD_ROWS) — retained here because the
         # Validation Report's Calculation Audit still checks them against
         # its own independent recomputation.
         ("Not Available / No Consent", not_available_no_consent),
-        ("", ""),  # Blank row
+        ("", ""),
 
         # Conversion Metrics
         ("Connection Rate (Connected / Dialed)", f"{connection_rate}%"),
@@ -300,29 +298,29 @@ def build_eod_report(call_detail_log: pd.DataFrame, start_date, end_date, agent_
         ("Non-Postpaid Conversion Rate", f"{non_postpaid_conversion_rate}%"),
         # Validation-Report-only, same as Not Available / No Consent above.
         ("Retries Queued for Tomorrow", retries_queued),
-        ("", ""),  # Blank row
+        ("", ""),
 
         # Non-Completion & Competitor
         ("Non-Completion - Price", non_completion_price),
         ("Non-Completion - Competitor", non_completion_competitor),
         ("Competitor Identified", competitor_identified),
-        ("", ""),  # Blank row
+        ("", ""),
 
         # Competitor breakdown — variable length, one row per provider
         *competitor_rows,
-        ("", ""),  # Blank row
+        ("", ""),
 
         # Quality
         ("Repeat Requested (quality)", repeat_requested),
         ("Identity Re-asked (defect)", identity_reasked),
         ("Opt-Out Requested", opt_out),
-        ("", ""),  # Blank row
+        ("", ""),
 
         # FINOPS Section
         ("FINOPS", ""),
         ("LLM Inference Cost (USD)", ""),
         ("Total Daily Spend (USD)", ""),
-        ("", ""),  # Blank row
+        ("", ""),
 
         # ISSUES & CHANGES Section
         ("ISSUES & CHANGES", ""),
@@ -330,7 +328,7 @@ def build_eod_report(call_detail_log: pd.DataFrame, start_date, end_date, agent_
         ("Open P1 Issues", ""),
         ("Changes Deployed Today", ""),
         ("Changes Pending Approval for Tomorrow", ""),
-        ("", ""),  # Blank row
+        ("", ""),
 
         # TOMORROW'S PLAN Section
         ("TOMORROW'S PLAN", ""),

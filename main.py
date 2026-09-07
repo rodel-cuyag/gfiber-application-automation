@@ -1,6 +1,4 @@
 """
-main.py
---------
 Entry point. Run this file to generate either:
   - Mode 1 "eod": GFiber Application EOD Report + Call Detail Log workbook
   - Mode 2 "contact-list": GFiber Application Contact List workbook
@@ -189,8 +187,7 @@ def run_contact_list(as_of_date=None, input_path=None):
     contact_path = None
 
     # All valid records for CSV output, in input file order.
-    all_records = categories["valid"].copy()
-    all_records["ref_id"] = config.CONTACT_LIST_REF_ID
+    all_records = categories["valid"]
 
     if not all_records.empty:
         # 6a. Write Contact List CSV.

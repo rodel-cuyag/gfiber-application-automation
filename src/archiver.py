@@ -1,6 +1,4 @@
 """
-archiver.py
------------
 Moves processed input files into a dated archive folder after a
 successful run, so the input directory empties out and is ready
 for the next drop.

@@ -1,6 +1,4 @@
 """
-call_detail.py
-----------------
 Builds the "Call Detail Log" sheet: one row per individual call, carrying
 every field the GFiber abandoned-application agent emits in outputJson
 alongside the Twilio call-progress outcome.

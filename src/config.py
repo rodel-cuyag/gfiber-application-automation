@@ -1,6 +1,4 @@
 """
-config.py
----------
 Single source of truth for file paths and settings.
 """
 
@@ -43,11 +41,6 @@ EOD_REQUIRED_COLUMNS = {
     ],
 }
 
-# ── Mode 2: Contact List — input file ────────────────────────────
-# data_loader auto-discovers the file in data/contact_list/ by scanning
-# for CSV/Excel files that have the required columns below.
-# Use --input on the CLI to override with an explicit path.
-
 # ── Output file naming ────────────────────────────────────────────
 # Filled in with the report date(s) at runtime (see main.py).
 # Single-day EOD runs (start == end) use the plain template; multi-day
@@ -65,9 +58,6 @@ VALIDATION_OUTPUT_FILENAME_TEMPLATE = "GFiber_Application_Validation_Report_{dat
 # name is required alongside the number — a blank name would produce a
 # broken spiel on the call.
 REQUIRED_CONTACT_LIST_HEADERS = ["customer_phone", "user"]
-
-# Constant ref_id value stamped on every row of the Contact List CSV output.
-CONTACT_LIST_REF_ID = "GOCUC20"
 
 # ── EOD output folderization ──────────────────────────────────────
 # Each date range gets its own subfolder under output/eod/ to keep

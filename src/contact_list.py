@@ -1,6 +1,4 @@
 """
-contact_list.py
-------------------
 Business logic for Mode 2: the GFiber Application Contact List. Takes the
 raw customer_phone / user list Globe provides and normalizes each number to
 the +63XXXXXXXXXX form used for dialling.
@@ -78,7 +76,7 @@ def categorize_records(raw_df: pd.DataFrame) -> dict:
     """
     df = raw_df.copy()
 
-    # Phase 1: validate each row
+    # Phase 1: per-row validation
     processed = []
     for _, row in df.iterrows():
         phone_raw = row.get("customer_phone")
@@ -109,13 +107,13 @@ def categorize_records(raw_df: pd.DataFrame) -> dict:
             "reasons": reasons,
         })
 
-    # Phase 2: duplicate detection (global, always runs)
+    # Phase 2: duplicate detection
     phone_counts = Counter(p["phone_raw"] for p in processed if p["phone_raw"])
     for p in processed:
         if p["phone_raw"] and phone_counts[p["phone_raw"]] > 1:
             p["reasons"].append("Duplicate phone number")
 
-    # Phase 3: classify into two buckets
+    # Phase 3: classification
     valid_list, invalid_list = [], []
 
     for p in processed:

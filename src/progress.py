@@ -1,6 +1,4 @@
 """
-progress.py
--------------
 A minimal terminal spinner for showing "still working" feedback during
 blocking operations (like reading a large CSV). Standard-library only —
 no extra dependency needed just for this.
@@ -41,7 +39,6 @@ class Spinner:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._stop_event.set()
         self._thread.join()
-        # Clear the spinner line and print a static "done" line in its place.
         status = "failed" if exc_type else "done"
         sys.stdout.write(f"\r{self.label}... {status}\n")
         sys.stdout.flush()

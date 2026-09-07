@@ -1,6 +1,4 @@
 """
-validation_report.py
---------------------
 Builds a multi-sheet validation workbook that audits the EOD report
 pipeline: source-data join coverage, per-row field completeness, a
 step-by-step calculation trace, and a consolidated data-quality issues
@@ -296,7 +294,7 @@ def _build_calculation_audit(detail_log, eod_df, start_date, end_date):
              "Busy")
     add_step(5, "Failed",
              "COUNTIF(Status = 'Failed')", f"{failed} rows", failed,
-             "Failed")  # not in report but useful
+             "Failed")
     add_step(6, "Unmatched (blank Status)",
              "COUNTIF(Status = blank)", f"{unmatched} rows", unmatched,
              "Unmatched")  # not in report
@@ -477,7 +475,6 @@ def _build_data_quality_issues(working_table, detail_log,
 
     issues = []
 
-    # Issues from the detail log rows
     for _, row_ in detail_log.iterrows():
         cid = row_["Conversation ID"]
 
@@ -519,7 +516,6 @@ def _build_data_quality_issues(working_table, detail_log,
                 "Severity": "Medium",
             })
 
-    # Contact-number reliability issues from the working table
     for _, row_ in working_table.iterrows():
         cid = row_["conversation_id"]
         reliability = row_.get("contact_number_reliability")

@@ -1,6 +1,4 @@
 """
-prior_day.py
--------------
 Best-effort lookup of the previous day's already-generated EOD Report
 workbook, so the current run's "Yesterday" column can be filled in
 without recomputing anything from the source data.
@@ -92,7 +90,7 @@ def load_previous_day_values(agent_id, previous_date) -> dict:
                 group = band_titles[label_cell.row]
                 continue
             if label_cell.value is None:
-                continue  # blank row
+                continue
             value = value_cell.value
             if isinstance(value, str) and value.startswith("="):
                 continue  # live formula; can't reliably read its result
